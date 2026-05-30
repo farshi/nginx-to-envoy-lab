@@ -88,6 +88,18 @@ docs/          ARCHITECTURE.md, MIGRATION_SUCCESS.md
 scripts/       bootstrap.sh and helpers
 ```
 
+## Documentation
+
+| Doc | Purpose |
+|---|---|
+| [`docs/WHY_MIGRATE.md`](docs/WHY_MIGRATE.md) | The case for the migration — frozen Ingress API, 2025 CVE pressure, feature gap, comparison table |
+| [`docs/ROLLOUT.md`](docs/ROLLOUT.md) | Phase-by-phase rollout playbook with shadow, weighted ramp, and four-level rollback |
+| [`docs/MIGRATION_SUCCESS.md`](docs/MIGRATION_SUCCESS.md) | The SLO gates that decide whether a step advances or rolls back |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Control plane vs data plane, why Gateway API over frozen Ingress |
+| [`docs/aws-eks.md`](docs/aws-eks.md) | EKS specifics — bare-cluster defaults, AWS Load Balancer Controller, IRSA, Karpenter |
+| [`docs/azure-aks.md`](docs/azure-aks.md) | AKS specifics — AGIC vs AGC, Workload Identity, managed Istio add-on |
+| [`docs/gcp-gke.md`](docs/gcp-gke.md) | GKE specifics — GKE Gateway (Envoy under the hood), NEGs, Workload Identity Federation |
+
 ## Status
 
-Single-node local lab. Reflects the EKS production pattern but runs on a laptop. Not multi-cluster, not multi-tenant — focus is the ingress comparison.
+Single-node local lab. Reflects the production migration pattern but runs on a laptop. Not multi-cluster, not multi-tenant — focus is the ingress comparison. See `docs/aws-eks.md`, `docs/azure-aks.md`, `docs/gcp-gke.md` for how the same pattern lands on each managed Kubernetes.
