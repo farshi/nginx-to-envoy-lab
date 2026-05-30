@@ -1,0 +1,39 @@
+# kube-prometheus-stack values for the nginx-to-envoy lab.
+# - Grafana on NodePort 30300 (mapped to host :3000 by Makefile k3d port flag)
+# - Prometheus on NodePort 30090 (mapped to host :9090)
+# - Dashboard sidecar enabled so ConfigMaps labelled grafana_dashboard="1" auto-load.
+
+grafana:
+  enabled: true
+  adminPassword: admin
+  service:
+    type: NodePort
+    nodePort: 30300
+  grafana.ini:
+    security:
+      allow_embedding: true
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+
+alertmanager:
+  enabled: false
+
+prometheusOperator:
+  enabled: true
+
+prometheus:
+  enabled: true
+  service:
+    type: NodePort
+    nodePort: 30090
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorNamespaceSelector: {}
+    podMonitorSelectorNilUsesHelmValues: false
+    podMonitorNamespaceSelector: {}
+    ruleSelectorNilUsesHelmValues: false
+    ruleNamespaceSelector: {}

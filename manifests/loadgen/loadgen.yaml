@@ -1,0 +1,40 @@
+# In-cluster steady traffic against both ingress paths.
+# Resolves the two hostnames to the cluster Services via hostAliases so we exit
+# through the real nginx and envoy data planes (not directly to the backend).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgen
+  namespace: demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loadgen
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: loadgen
+    spec:
+      hostAliases:
+        - ip: "10.43.0.1"   # placeholder; resolve real LB ClusterIPs at apply-time
+          hostnames:
+            - nginx-demo.localhost
+            - envoy-demo.localhost
+      containers:
+        - name: loadgen
+          image: curlimages/curl:8.7.1
+          command: ["/bin/sh","-c"]
+          args:
+            - |
+              set -e
+              while true; do
+                # Hit through the in-cluster Service DNS — keeps load steady regardless of host port mapping.
+                curl -s -o /dev/null -w "nginx %{http_code} %{time_total}\n" \
+                  -H "Host: nginx-demo.localhost" \
+                  http://ingress-nginx-controller.ingress-nginx.svc.cluster.local/ &
+                curl -s -o /dev/null -w "envoy %{http_code} %{time_total}\n" \
+                  -H "Host: envoy-demo.localhost" \
+                  http://envoy-eg.envoy-gateway-system.svc.cluster.local/ &
+                sleep 0.1
+              done

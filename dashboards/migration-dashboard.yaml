@@ -1,0 +1,68 @@
+# Grafana picks this up via the kube-prometheus-stack sidecar (label: grafana_dashboard).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-vs-envoy-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  nginx-vs-envoy.json: |
+    {
+      "uid": "nginx-vs-envoy",
+      "title": "Ingress Migration — nginx vs Envoy",
+      "tags": ["migration","ingress","envoy"],
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "templating": { "list": [] },
+      "panels": [
+        {
+          "type": "timeseries", "title": "Request rate (req/s)",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+          "targets": [
+            { "expr": "sum(rate(nginx_ingress_controller_requests[1m]))", "legendFormat": "nginx" },
+            { "expr": "sum(rate(envoy_cluster_upstream_rq_total[1m]))", "legendFormat": "envoy" }
+          ]
+        },
+        {
+          "type": "timeseries", "title": "Error rate — 5xx %",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+          "fieldConfig": { "defaults": { "unit": "percentunit" } },
+          "targets": [
+            { "expr": "sum(rate(nginx_ingress_controller_requests{status=~\"5..\"}[1m])) / sum(rate(nginx_ingress_controller_requests[1m]))", "legendFormat": "nginx 5xx" },
+            { "expr": "sum(rate(envoy_cluster_upstream_rq_xx{envoy_response_code_class=\"5\"}[1m])) / sum(rate(envoy_cluster_upstream_rq_total[1m]))", "legendFormat": "envoy 5xx" }
+          ]
+        },
+        {
+          "type": "timeseries", "title": "Latency p99 (seconds)",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            { "expr": "histogram_quantile(0.99, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "nginx p99" },
+            { "expr": "histogram_quantile(0.99, sum(rate(envoy_cluster_upstream_rq_time_bucket[5m])) by (le))", "legendFormat": "envoy p99" }
+          ]
+        },
+        {
+          "type": "stat", "title": "Envoy xDS sync (1 = connected)",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 24 },
+          "targets": [{ "expr": "max(envoy_control_plane_connected_state)" }]
+        },
+        {
+          "type": "stat", "title": "Envoy outlier ejections (active)",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 24 },
+          "targets": [{ "expr": "sum(envoy_cluster_outlier_detection_ejections_active)" }]
+        },
+        {
+          "type": "stat", "title": "Envoy CB overflow (UO 503s)",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 24 },
+          "targets": [{ "expr": "sum(rate(envoy_cluster_upstream_cx_overflow[5m]))" }]
+        },
+        {
+          "type": "stat", "title": "Healthy upstream endpoints",
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 24 },
+          "targets": [{ "expr": "sum(envoy_cluster_membership_healthy)" }]
+        }
+      ]
+    }
