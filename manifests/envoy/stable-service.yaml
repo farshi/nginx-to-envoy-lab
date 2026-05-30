@@ -1,0 +1,20 @@
+# Stable DNS name fronting the Envoy proxy Pods.
+# Envoy Gateway provisions a Service whose name carries a hash; this Service
+# uses the same selector but a fixed name, so in-cluster clients (loadgen) can
+# resolve envoy-edge.envoy-gateway-system.svc.cluster.local.
+apiVersion: v1
+kind: Service
+metadata:
+  name: envoy-edge
+  namespace: envoy-gateway-system
+spec:
+  selector:
+    app.kubernetes.io/component: proxy
+    app.kubernetes.io/managed-by: envoy-gateway
+    app.kubernetes.io/name: envoy
+    gateway.envoyproxy.io/owning-gateway-name: eg
+    gateway.envoyproxy.io/owning-gateway-namespace: demo
+  ports:
+    - name: http
+      port: 80
+      targetPort: 10080

@@ -44,8 +44,8 @@ Two hostnames resolve to the same backend through different controllers:
 ```bash
 make up           # k3d cluster + all installs + manifests + dashboards
 make traffic      # background load against both hostnames
-make grafana      # open Grafana at http://localhost:3000  (admin / admin)
-make prom         # open Prometheus at http://localhost:9090
+make grafana      # open Grafana at http://localhost:3001  (admin / admin)
+make prom         # open Prometheus at http://localhost:9091
 make demo         # ascii summary + curl-test both paths
 make down         # destroy cluster
 ```

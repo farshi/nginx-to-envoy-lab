@@ -35,6 +35,6 @@ spec:
                   http://ingress-nginx-controller.ingress-nginx.svc.cluster.local/ &
                 curl -s -o /dev/null -w "envoy %{http_code} %{time_total}\n" \
                   -H "Host: envoy-demo.localhost" \
-                  http://envoy-eg.envoy-gateway-system.svc.cluster.local/ &
+                  http://envoy-edge.envoy-gateway-system.svc.cluster.local/ &
                 sleep 0.1
               done

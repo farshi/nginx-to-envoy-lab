@@ -12,7 +12,7 @@ NAMESPACE ?= demo
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-up: cluster image install-nginx install-envoy install-monitoring apply ## End-to-end bootstrap
+up: cluster image install-monitoring install-nginx install-envoy apply ## End-to-end bootstrap
 
 cluster: ## Create k3d cluster (Traefik disabled, ports exposed for both ingresses + Grafana + Prom)
 	$(SHOW) "k3d cluster create $(CLUSTER)"
@@ -20,8 +20,8 @@ cluster: ## Create k3d cluster (Traefik disabled, ports exposed for both ingress
 		--k3s-arg "--disable=traefik@server:0" \
 		--port "8081:80@loadbalancer" \
 		--port "8082:8080@loadbalancer" \
-		--port "3000:30300@server:0" \
-		--port "9090:30090@server:0" \
+		--port "3001:30300@server:0" \
+		--port "9091:30090@server:0" \
 		--agents 1 --wait
 	@kubectl create ns $(NAMESPACE) || true
 
@@ -80,12 +80,12 @@ traffic-stop: ## Stop background load generators
 	@echo "load stopped"
 
 grafana: ## Open Grafana
-	@open http://localhost:3000 || xdg-open http://localhost:3000 || true
-	@echo "Grafana http://localhost:3000  (admin / admin)"
+	@open http://localhost:3001 || xdg-open http://localhost:3001 || true
+	@echo "Grafana http://localhost:3001  (admin / admin)"
 
 prom: ## Open Prometheus
-	@open http://localhost:9090 || xdg-open http://localhost:9090 || true
-	@echo "Prometheus http://localhost:9090"
+	@open http://localhost:9091 || xdg-open http://localhost:9091 || true
+	@echo "Prometheus http://localhost:9091"
 
 demo: ## Curl both paths to confirm both stacks serve
 	$(SHOW) "curl via nginx"

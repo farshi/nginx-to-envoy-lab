@@ -1,8 +1,8 @@
-# Envoy Gateway proxies expose Prometheus metrics on the admin interface.
-# This ServiceMonitor scrapes the auto-generated envoy proxy Service.
-# Adjust the port if your Envoy Gateway version exposes metrics under a different name.
+# Envoy Gateway provisions a Service for the proxy with only the HTTP port (80).
+# The proxy emits Prometheus metrics on container port 19001 (named "metrics"),
+# which the Service does not expose — so we scrape the pods directly with a PodMonitor.
 apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
+kind: PodMonitor
 metadata:
   name: envoy-proxy
   namespace: monitoring
@@ -13,11 +13,15 @@ spec:
     matchNames: ["envoy-gateway-system"]
   selector:
     matchLabels:
-      gateway.envoyproxy.io/owning-gateway-name: eg
-  endpoints:
+      app.kubernetes.io/component: proxy
+      app.kubernetes.io/managed-by: envoy-gateway
+      app.kubernetes.io/name: envoy
+  podMetricsEndpoints:
     - port: metrics
       path: /stats/prometheus
       interval: 15s
       relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_label_gateway_envoyproxy_io_owning_gateway_name]
+          targetLabel: gateway
         - sourceLabels: [__meta_kubernetes_pod_name]
           targetLabel: envoy_pod
