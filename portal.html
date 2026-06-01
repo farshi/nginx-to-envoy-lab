@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>nginx → envoy · Mission Control</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html,body{margin:0;background:#0d0d0f;color:#e8e6e3;font-family:'IBM Plex Mono','SF Mono','Courier New',monospace;}
+  *{box-sizing:border-box;}
+  iframe{border:0;width:100%;height:100%;background:#13131a;}
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-track{background:#0d0d0f;}
+  ::-webkit-scrollbar-thumb{background:#2a2a32;border-radius:5px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+
+const GRAFANA = "http://localhost:3001";
+const PROM = "http://localhost:9091";
+
+const promqlLibrary = [
+  { group: "RED · Rate", items: [
+    { label: "nginx — req/s",        q: "sum(rate(nginx_ingress_controller_requests[1m]))" },
+    { label: "envoy — req/s",        q: "sum(rate(envoy_cluster_upstream_rq_total[1m]))" },
+    { label: "demo-api — req/s",     q: "sum(rate(http_requests_total{service=\"demo-api\"}[1m]))" },
+  ]},
+  { group: "RED · Errors", items: [
+    { label: "nginx 5xx %",          q: "sum(rate(nginx_ingress_controller_requests{status=~\"5..\"}[1m])) / sum(rate(nginx_ingress_controller_requests[1m]))" },
+    { label: "envoy 5xx %",          q: "sum(rate(envoy_cluster_upstream_rq_xx{envoy_response_code_class=\"5\"}[1m])) / sum(rate(envoy_cluster_upstream_rq_total[1m]))" },
+    { label: "envoy 5xx absolute",   q: "sum(rate(envoy_cluster_upstream_rq_xx{envoy_response_code_class=\"5\"}[1m]))" },
+  ]},
+  { group: "RED · Latency", items: [
+    { label: "nginx p99",            q: "histogram_quantile(0.99, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket[5m])) by (le))" },
+    { label: "envoy p99",            q: "histogram_quantile(0.99, sum(rate(envoy_cluster_upstream_rq_time_bucket[5m])) by (le))" },
+    { label: "demo-api p99",         q: "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))" },
+  ]},
+  { group: "Envoy — health & xDS", items: [
+    { label: "xDS connected (1=up)",       q: "max(envoy_control_plane_connected_state)" },
+    { label: "healthy upstream endpoints", q: "sum(envoy_cluster_membership_healthy)" },
+    { label: "outlier ejections (active)", q: "sum(envoy_cluster_outlier_detection_ejections_active)" },
+    { label: "circuit breaker overflow",   q: "sum(rate(envoy_cluster_upstream_cx_overflow[5m]))" },
+    { label: "active upstream conns",      q: "sum(envoy_cluster_upstream_cx_active)" },
+  ]},
+  { group: "Resource cost", items: [
+    { label: "envoy memory (MiB)", q: "container_memory_working_set_bytes{pod=~\".*envoy.*\"} / 1024 / 1024" },
+    { label: "nginx memory (MiB)", q: "container_memory_working_set_bytes{pod=~\".*ingress-nginx.*\"} / 1024 / 1024" },
+    { label: "envoy CPU throttle",  q: "rate(container_cpu_cfs_throttled_seconds_total{pod=~\".*envoy.*\"}[5m])" },
+  ]},
+];
+
+const migrationSteps = [
+  { phase: "0 · Prep", days: "T-7", items: [
+    "Document current nginx config: annotations, custom snippets, TLS, rate-limits.",
+    "Lower DNS TTL to 60s for every hostname that will move (kills slow rollback).",
+    "Capture 7 days of nginx baseline: request rate, 5xx %, p99 — these become SLO gates.",
+    "Pre-stage Envoy Gateway in non-prod with the same routes; pass functional tests.",
+    "Build the nginx-annotation → Gateway-API translation matrix.",
+    "Announce change window to app teams + incident channel.",
+  ]},
+  { phase: "1 · Deploy parallel", days: "T-1", items: [
+    "Install Envoy Gateway alongside ingress-nginx — different namespace, different LB.",
+    "Apply GatewayClass + Gateway + HTTPRoute mirroring active nginx routes.",
+    "Curl / port-forward the Envoy path directly (no public traffic yet).",
+    "Confirm Prometheus scrapes Envoy /stats/prometheus and dashboard populated.",
+    "Exit gate: Envoy returns same status / body for the test suite as nginx.",
+  ]},
+  { phase: "2 · Shadow / mirror (24h)", days: "T-0", items: [
+    "Mirror 100% prod traffic to Envoy (LB mirror or in-cluster sidecar).",
+    "Compare distributions: status code, latency p50/p95/p99, body checksums.",
+    "Watch new dashboards: upstream health, outlier ejections, xDS sync, memory.",
+    "Exit gate: every SLO in MIGRATION_SUCCESS.md green for 24h, no divergent pattern.",
+  ]},
+  { phase: "3 · Weighted ramp", days: "T-0", items: [
+    "5%  → hold 30min → gates green → next",
+    "25% → hold 30min → gates green → next",
+    "50% → hold 60min → gates green → next",
+    "100% → soak 24h",
+    "Auto-rollback to previous weight on ANY SLO gate breach.",
+  ]},
+  { phase: "4 · Cutover complete", days: "T+1", items: [
+    "Mark migration complete after 24h clean soak at 100%.",
+    "Keep nginx warm (no DNS pointing at it) for fast revert option.",
+  ]},
+  { phase: "5 · Decommission", days: "T+14", items: [
+    "After 14 clean days: delete Ingress objects, helm uninstall ingress-nginx.",
+    "Archive nginx-specific dashboards, alerts, runbooks.",
+    "Final comms: migration complete.",
+  ]},
+];
+
+const rollbackLevels = [
+  { lvl: "L1", title: "Reduce weight (seconds)", body: "DNS weight back to previous step. e.g. 25% → 5%. Envoy still partially viable but breach detected." },
+  { lvl: "L2", title: "Full revert (≤60s with 60s TTL)", body: "DNS Envoy 0%, nginx 100%. Envoy materially worse than baseline." },
+  { lvl: "L3", title: "Pin via HTTPRoute", body: "Internal/DNS-slow clients: HTTPRoute weights to 0 for new backend variant." },
+  { lvl: "L4", title: "Kill Envoy listener", body: "kubectl delete gateway eg OR scale Envoy proxy to 0. Use only if Envoy is actively harmful." },
+];
+
+const localTools = [
+  { name: "Grafana",    url: "http://localhost:3001", note: "admin / admin · open dashboard 'Ingress Migration — nginx vs Envoy'" },
+  { name: "Prometheus", url: "http://localhost:9091", note: "/targets to confirm scrape health" },
+  { name: "nginx path", url: "http://nginx-demo.localhost:8081/", note: "needs /etc/hosts line" },
+  { name: "envoy path", url: "http://envoy-demo.localhost:8082/", note: "via port-forward if k3d serverlb dual-bind fails" },
+  { name: "GitHub repo", url: "https://github.com/farshi/nginx-to-envoy-lab", note: "public source" },
+];
+
+const commandCheatsheet = [
+  { label: "make up",              cmd: "make up" },
+  { label: "make demo",            cmd: "make demo" },
+  { label: "make traffic",         cmd: "make traffic   # hey load on both" },
+  { label: "make grafana",         cmd: "make grafana" },
+  { label: "make down",            cmd: "make down" },
+  { label: "envoy admin · /clusters",   cmd: "kubectl -n envoy-gateway-system port-forward $(kubectl -n envoy-gateway-system get pod -l gateway.envoyproxy.io/owning-gateway-name=eg -o name | head -1) 19000:19000 &\\ncurl -s localhost:19000/clusters | head" },
+  { label: "envoy /config_dump",   cmd: "curl -s localhost:19000/config_dump | jq '.configs[].\"@type\"'" },
+  { label: "prom targets",         cmd: "curl -s http://localhost:9091/api/v1/targets?state=active | jq '.data.activeTargets[].labels.job' | sort -u" },
+];
+
+const promLink = (q) => `${PROM}/graph?g0.expr=${encodeURIComponent(q)}&g0.tab=0`;
+
+function CopyBtn({ text }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      onClick={() => { navigator.clipboard.writeText(text); setDone(true); setTimeout(() => setDone(false), 1200); }}
+      style={{ background: "transparent", border: "1px solid #2a2a32", color: done ? "#00d4aa" : "#888", padding: "2px 8px", fontSize: 10, fontFamily: "inherit", cursor: "pointer", borderRadius: 2 }}>
+      {done ? "✓ copied" : "copy"}
+    </button>
+  );
+}
+
+function Header({ active, setActive }) {
+  const tabs = [
+    { id: "mission",  label: "Mission Control",  emoji: "🎯", color: "#00d4aa" },
+    { id: "promql",   label: "PromQL Library",   emoji: "📊", color: "#a78bfa" },
+    { id: "steps",    label: "Migration Steps",  emoji: "🛣️", color: "#4ecdc4" },
+    { id: "rollback", label: "Rollback",         emoji: "↩️", color: "#ff6b6b" },
+    { id: "tools",    label: "Tools & Commands", emoji: "🛠️", color: "#f59e0b" },
+    { id: "help",     label: "Help",             emoji: "❓", color: "#888" },
+  ];
+  return (
+    <div style={{ borderBottom: "1px solid #1e1e24", padding: "16px 24px", background: "#0d0d0f", position: "sticky", top: 0, zIndex: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: "#666", letterSpacing: "0.15em", textTransform: "uppercase" }}>nginx → envoy //</span>
+        <h1 style={{ fontSize: 16, fontWeight: 700, color: "#00d4aa", margin: 0 }}>Mission Control</h1>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setActive(t.id)} style={{
+              background: active === t.id ? "#13131a" : "transparent",
+              border: active === t.id ? `1px solid ${t.color}66` : "1px solid #1e1e24",
+              color: active === t.id ? t.color : "#888",
+              padding: "6px 12px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 3, letterSpacing: "0.05em",
+            }}>{t.emoji} {t.label}</button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MissionControl() {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12, padding: 12, height: "calc(100vh - 73px)" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ flex: 1, border: "1px solid #1e1e24", borderRadius: 4, overflow: "hidden" }}>
+          <div style={{ padding: "8px 12px", fontSize: 11, color: "#888", borderBottom: "1px solid #1e1e24", background: "#0f0f14" }}>
+            Grafana — Ingress Migration dashboard
+            <a href={GRAFANA} target="_blank" style={{ float: "right", color: "#00d4aa", textDecoration: "none" }}>open ↗</a>
+          </div>
+          <iframe src={`${GRAFANA}/d/nginx-vs-envoy/ingress-migration-nginx-vs-envoy?orgId=1&kiosk=tv&refresh=10s`} title="grafana" />
+        </div>
+        <div style={{ height: 280, border: "1px solid #1e1e24", borderRadius: 4, overflow: "hidden" }}>
+          <div style={{ padding: "8px 12px", fontSize: 11, color: "#888", borderBottom: "1px solid #1e1e24", background: "#0f0f14" }}>
+            Prometheus — query &amp; targets
+            <a href={PROM} target="_blank" style={{ float: "right", color: "#a78bfa", textDecoration: "none" }}>open ↗</a>
+          </div>
+          <iframe src={`${PROM}/targets`} title="prom" />
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
+        <div style={{ border: "1px solid #1e1e24", borderRadius: 4, padding: 12 }}>
+          <div style={{ fontSize: 11, color: "#888", marginBottom: 8, letterSpacing: "0.1em" }}>SLO GATES (cutover-blocking)</div>
+          {[
+            { k: "Envoy 5xx", t: "≤ nginx + 0.1%" },
+            { k: "Envoy p99", t: "≤ nginx × 1.10" },
+            { k: "Healthy endpoints", t: "envoy == nginx" },
+            { k: "CB overflow", t: "rate == 0" },
+            { k: "xDS sync", t: "connected_state == 1" },
+            { k: "Memory", t: "envoy ≤ nginx × 2" },
+          ].map((g, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "5px 0", borderBottom: "1px solid #13131a" }}>
+              <span style={{ color: "#c8c5c0" }}>{g.k}</span><span style={{ color: "#00d4aa" }}>{g.t}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ border: "1px solid #1e1e24", borderRadius: 4, padding: 12 }}>
+          <div style={{ fontSize: 11, color: "#888", marginBottom: 8, letterSpacing: "0.1em" }}>QUICK LINKS</div>
+          {localTools.map((t, i) => (
+            <a key={i} href={t.url} target="_blank" style={{ display: "block", padding: "6px 0", borderBottom: "1px solid #13131a", color: "#c8c5c0", fontSize: 12, textDecoration: "none" }}>
+              <span style={{ color: "#00d4aa" }}>▸ {t.name}</span>
+              <div style={{ fontSize: 10, color: "#666", marginLeft: 14 }}>{t.note}</div>
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PromQLLibrary() {
+  return (
+    <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto", overflowY: "auto", height: "calc(100vh - 73px)" }}>
+      <div style={{ fontSize: 12, color: "#666", marginBottom: 18 }}>Click a query to open in Prometheus, or copy to clipboard. RED + Envoy-specific + resource cost.</div>
+      {promqlLibrary.map((g, gi) => (
+        <div key={gi} style={{ marginBottom: 24 }}>
+          <div style={{ color: "#a78bfa", fontSize: 13, fontWeight: 700, marginBottom: 10, letterSpacing: "0.05em" }}>{g.group}</div>
+          {g.items.map((it, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "200px 1fr 80px 80px", gap: 12, alignItems: "center", padding: "8px 10px", border: "1px solid #1e1e24", borderRadius: 3, marginBottom: 6, background: "#0f0f14" }}>
+              <div style={{ color: "#c8c5c0", fontSize: 12 }}>{it.label}</div>
+              <code style={{ color: "#888", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.q}</code>
+              <a href={promLink(it.q)} target="_blank" style={{ color: "#00d4aa", fontSize: 10, textDecoration: "none", textAlign: "center", border: "1px solid #00d4aa44", padding: "2px 8px", borderRadius: 2 }}>open ↗</a>
+              <CopyBtn text={it.q} />
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MigrationSteps() {
+  return (
+    <div style={{ padding: 24, maxWidth: 1000, margin: "0 auto", overflowY: "auto", height: "calc(100vh - 73px)" }}>
+      <div style={{ fontSize: 12, color: "#666", marginBottom: 24 }}>
+        Six phases, fully reversible. Pair with <a href="https://github.com/farshi/nginx-to-envoy-lab/blob/main/docs/ROLLOUT.md" target="_blank" style={{ color: "#4ecdc4" }}>ROLLOUT.md</a> and <a href="https://github.com/farshi/nginx-to-envoy-lab/blob/main/docs/MIGRATION_SUCCESS.md" target="_blank" style={{ color: "#4ecdc4" }}>MIGRATION_SUCCESS.md</a>.
+      </div>
+      {migrationSteps.map((p, i) => (
+        <div key={i} style={{ marginBottom: 20, border: "1px solid #1e1e24", borderRadius: 4, padding: 16, background: "#0f0f14" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
+            <div style={{ color: "#4ecdc4", fontSize: 15, fontWeight: 700 }}>{p.phase}</div>
+            <div style={{ color: "#666", fontSize: 11 }}>{p.days}</div>
+          </div>
+          <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+            {p.items.map((it, k) => (
+              <li key={k} style={{ display: "flex", gap: 10, fontSize: 12.5, color: "#c8c5c0", padding: "5px 0", borderBottom: k < p.items.length - 1 ? "1px solid #13131a" : "none" }}>
+                <span style={{ color: "#4ecdc4" }}>▸</span><span>{it}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Rollback() {
+  return (
+    <div style={{ padding: 24, maxWidth: 900, margin: "0 auto", overflowY: "auto", height: "calc(100vh - 73px)" }}>
+      <div style={{ fontSize: 12, color: "#666", marginBottom: 18 }}>Four escalation levels. Pick the lightest that fixes the breach.</div>
+      {rollbackLevels.map((r, i) => (
+        <div key={i} style={{ marginBottom: 14, border: "1px solid #1e1e24", borderRadius: 4, padding: 16, background: "#0f0f14" }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "baseline" }}>
+            <span style={{ color: "#ff6b6b", fontWeight: 700, fontSize: 16 }}>{r.lvl}</span>
+            <span style={{ color: "#e8e6e3", fontSize: 14 }}>{r.title}</span>
+          </div>
+          <div style={{ color: "#888", fontSize: 12, marginTop: 6, lineHeight: 1.6 }}>{r.body}</div>
+        </div>
+      ))}
+      <div style={{ marginTop: 24, border: "1px solid #ff6b6b44", borderRadius: 4, padding: 16, background: "#0f0f14" }}>
+        <div style={{ color: "#ff6b6b", fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Rollback checklist</div>
+        <ol style={{ margin: 0, paddingLeft: 20, color: "#c8c5c0", fontSize: 12.5, lineHeight: 1.8 }}>
+          <li>Trigger DNS / weight change.</li>
+          <li>Confirm error rate returns to baseline within 2 minutes.</li>
+          <li>Capture: time of breach, gate that fired, dashboard screenshot, top 3 hypotheses.</li>
+          <li>Open incident ticket, write the post-mortem.</li>
+          <li>Do not retry the ramp before root cause is understood and fixed in non-prod.</li>
+        </ol>
+      </div>
+    </div>
+  );
+}
+
+function ToolsCommands() {
+  return (
+    <div style={{ padding: 24, maxWidth: 1000, margin: "0 auto", overflowY: "auto", height: "calc(100vh - 73px)" }}>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ color: "#f59e0b", fontSize: 13, fontWeight: 700, marginBottom: 10 }}>LOCAL TOOLS</div>
+        {localTools.map((t, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "120px 1fr 70px", gap: 12, alignItems: "center", padding: "8px 12px", border: "1px solid #1e1e24", borderRadius: 3, marginBottom: 6, background: "#0f0f14" }}>
+            <div style={{ color: "#e8e6e3", fontSize: 13 }}>{t.name}</div>
+            <div>
+              <a href={t.url} target="_blank" style={{ color: "#f59e0b", fontSize: 11, textDecoration: "none" }}>{t.url}</a>
+              <div style={{ fontSize: 10, color: "#666", marginTop: 2 }}>{t.note}</div>
+            </div>
+            <CopyBtn text={t.url} />
+          </div>
+        ))}
+      </div>
+      <div>
+        <div style={{ color: "#f59e0b", fontSize: 13, fontWeight: 700, marginBottom: 10 }}>COMMAND CHEATSHEET</div>
+        {commandCheatsheet.map((c, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "240px 1fr 70px", gap: 12, alignItems: "start", padding: "8px 12px", border: "1px solid #1e1e24", borderRadius: 3, marginBottom: 6, background: "#0f0f14" }}>
+            <div style={{ color: "#e8e6e3", fontSize: 12 }}>{c.label}</div>
+            <code style={{ color: "#888", fontSize: 11, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{c.cmd}</code>
+            <CopyBtn text={c.cmd} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Help() {
+  return (
+    <div style={{ padding: 24, maxWidth: 900, margin: "0 auto", overflowY: "auto", height: "calc(100vh - 73px)" }}>
+      <h2 style={{ color: "#888", fontSize: 16, marginBottom: 6 }}>What this is</h2>
+      <p style={{ color: "#c8c5c0", fontSize: 13, lineHeight: 1.7 }}>
+        Single-page mission control for the nginx-to-envoy lab. Embeds the local Grafana dashboard, links to Prometheus queries, walks the rollout phases, and surfaces the rollback escalation tree.
+      </p>
+      <h2 style={{ color: "#888", fontSize: 16, marginTop: 22, marginBottom: 6 }}>Bring it up</h2>
+      <pre style={{ background: "#0f0f14", border: "1px solid #1e1e24", padding: 14, borderRadius: 4, color: "#c8c5c0", fontSize: 12, overflowX: "auto" }}>{`# 1. Add the demo hostnames once
+echo "127.0.0.1 nginx-demo.localhost envoy-demo.localhost" | sudo tee -a /etc/hosts
+
+# 2. Bootstrap the lab (k3d + nginx + envoy + kube-prometheus-stack + manifests)
+cd ~/dev/nginx-to-envoy-lab
+make up
+
+# 3. Generate load
+make traffic     # background hey against both hostnames
+
+# 4. Open this portal
+open portal.html
+`}</pre>
+      <h2 style={{ color: "#888", fontSize: 16, marginTop: 22, marginBottom: 6 }}>Reading the dashboard</h2>
+      <ol style={{ color: "#c8c5c0", fontSize: 13, lineHeight: 1.8, paddingLeft: 20 }}>
+        <li><b>Rate</b> panel — both stacks track the load generator.</li>
+        <li><b>Error rate</b> — Envoy ≤ nginx baseline + 0.1 %. Above = rollback.</li>
+        <li><b>p99 latency</b> — Envoy ≤ nginx p99 × 1.10. Above = rollback.</li>
+        <li><b>xDS connected</b> stat = 1 means control plane is delivering config.</li>
+        <li><b>Circuit-breaker overflow</b> non-zero = limits too tight, fix before ramping.</li>
+      </ol>
+      <h2 style={{ color: "#888", fontSize: 16, marginTop: 22, marginBottom: 6 }}>Doc index</h2>
+      <ul style={{ color: "#c8c5c0", fontSize: 13, lineHeight: 1.9, paddingLeft: 20 }}>
+        <li><a href="https://github.com/farshi/nginx-to-envoy-lab/blob/main/README.md"             target="_blank" style={{ color: "#00d4aa" }}>README</a> — pitch + quick-start</li>
+        <li><a href="https://github.com/farshi/nginx-to-envoy-lab/blob/main/docs/WHY_MIGRATE.md"    target="_blank" style={{ color: "#00d4aa" }}>WHY_MIGRATE.md</a> — frozen Ingress, 2025 CVEs, comparison table</li>
+        <li><a href="https://github.com/farshi/nginx-to-envoy-lab/blob/main/docs/ROLLOUT.md"        target="_blank" style={{ color: "#00d4aa" }}>ROLLOUT.md</a> — phases, weighted ramp, rollback</li>
+        <li><a href="https://github.com/farshi/nginx-to-envoy-lab/blob/main/docs/MIGRATION_SUCCESS.md" target="_blank" style={{ color: "#00d4aa" }}>MIGRATION_SUCCESS.md</a> — SLO gates</li>
+        <li><a href="https://github.com/farshi/nginx-to-envoy-lab/blob/main/docs/ARCHITECTURE.md"   target="_blank" style={{ color: "#00d4aa" }}>ARCHITECTURE.md</a> — control vs data plane</li>
+        <li><a href="https://github.com/farshi/nginx-to-envoy-lab/blob/main/docs/aws-eks.md"        target="_blank" style={{ color: "#00d4aa" }}>aws-eks.md</a> · <a href="https://github.com/farshi/nginx-to-envoy-lab/blob/main/docs/azure-aks.md" target="_blank" style={{ color: "#00d4aa" }}>azure-aks.md</a> · <a href="https://github.com/farshi/nginx-to-envoy-lab/blob/main/docs/gcp-gke.md" target="_blank" style={{ color: "#00d4aa" }}>gcp-gke.md</a></li>
+      </ul>
+    </div>
+  );
+}
+
+function App() {
+  const [active, setActive] = useState("mission");
+  return (
+    <div>
+      <Header active={active} setActive={setActive} />
+      {active === "mission"  && <MissionControl />}
+      {active === "promql"   && <PromQLLibrary />}
+      {active === "steps"    && <MigrationSteps />}
+      {active === "rollback" && <Rollback />}
+      {active === "tools"    && <ToolsCommands />}
+      {active === "help"     && <Help />}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
