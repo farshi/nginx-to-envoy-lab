@@ -1,0 +1,29 @@
+# ArgoCD watches this repo's manifests/ directory and reconciles into the cluster.
+# Helm-installed pieces (ingress-nginx, envoy-gateway, kube-prometheus-stack) stay
+# managed by the Makefile bootstrap — ArgoCD here covers the application layer only.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: nginx-to-envoy-lab
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/farshi/nginx-to-envoy-lab.git
+    targetRevision: main
+    path: manifests
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    # namespace deliberately blank — each manifest carries its own namespace
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true

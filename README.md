@@ -55,6 +55,17 @@ make down         # destroy cluster
 
 k3d's `serverlb` (klipper-lb) forwards a host port to **one** in-cluster `LoadBalancer` Service per backend port. Ingress-nginx claimed it first, so `http://nginx-demo.localhost:8081/` flows through `serverlb` directly. The Envoy proxy LB never gets a `serverlb` slot, so `make tunnel` keeps a `kubectl port-forward svc/envoy-edge 8082:80` running. `make up` starts it automatically.
 
+### Optional — GitOps via ArgoCD
+
+Install ArgoCD and let it reconcile the `manifests/` tree from this repo:
+
+```bash
+make argocd          # install ArgoCD, apply the Application CR, open the UI
+                     # prints admin password
+```
+
+ArgoCD UI then shows the live application tree (Deployment → ReplicaSet → Pods, with sync + health badges per node). Edit a manifest, push to `main`, watch ArgoCD reconcile within ~30s. Helm-installed pieces (ingress-nginx, envoy-gateway, kube-prometheus-stack) stay owned by the Makefile bootstrap — ArgoCD only manages the application-layer manifests so there's no chicken-and-egg.
+
 Add the demo hostnames once:
 
 ```bash
