@@ -172,8 +172,8 @@ function CopyBtn({ text }) {
 
 function Sidebar({ active, setActive }) {
   const tabs = [
-    { id: "mission",  label: "Mission Control",  emoji: "🎯", color: "var(--accent)" },
-    { id: "promql",   label: "PromQL Library",   emoji: "📊", color: "var(--purple)" },
+    { id: "grafana",  label: "Grafana",          emoji: "📈", color: "var(--accent)" },
+    { id: "prom",     label: "Prometheus",       emoji: "📊", color: "var(--purple)" },
     { id: "steps",    label: "Migration Steps",  emoji: "🛣️", color: "var(--teal)"   },
     { id: "rollback", label: "Rollback",         emoji: "↩️", color: "var(--err)"    },
     { id: "tools",    label: "Tools & Commands", emoji: "🛠️", color: "var(--amber)"  },
@@ -223,29 +223,18 @@ function PageHeader({ title, sub, color }) {
   );
 }
 
-function MissionControl() {
+function GrafanaPage() {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
-      <PageHeader title="🎯 Mission Control" sub="Live Grafana + Prometheus targets + SLO gates" color="var(--accent)" />
-      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, padding: 14, minHeight: 0 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: 0 }}>
-          <div style={{ ...card, flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-            <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--muted)", borderBottom: "1px solid var(--line)", background: "var(--panel-alt)" }}>
-              Grafana — Ingress Migration dashboard
-              <a href={GRAFANA} target="_blank" style={{ float: "right", color: "var(--accent)", textDecoration: "none", fontWeight: 500 }}>open ↗</a>
-            </div>
-            <div style={{ flex: 1 }}>
-              <iframe src={`${GRAFANA}/d/nginx-vs-envoy/ingress-migration-nginx-vs-envoy?orgId=1&kiosk=tv&refresh=10s&theme=light`} title="grafana" />
-            </div>
+      <PageHeader title="📈 Grafana" sub="Live ingress-migration dashboard, SLO gates, quick links." color="var(--accent)" />
+      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 320px", gap: 14, padding: 14, minHeight: 0 }}>
+        <div style={{ ...card, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--muted)", borderBottom: "1px solid var(--line)", background: "var(--panel-alt)" }}>
+            Ingress Migration — nginx vs Envoy
+            <a href={GRAFANA} target="_blank" style={{ float: "right", color: "var(--accent)", textDecoration: "none", fontWeight: 500 }}>open ↗</a>
           </div>
-          <div style={{ ...card, height: 280, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-            <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--muted)", borderBottom: "1px solid var(--line)", background: "var(--panel-alt)" }}>
-              Prometheus — targets &amp; query
-              <a href={PROM} target="_blank" style={{ float: "right", color: "var(--purple)", textDecoration: "none", fontWeight: 500 }}>open ↗</a>
-            </div>
-            <div style={{ flex: 1 }}>
-              <iframe src={`${PROM}/targets`} title="prom" />
-            </div>
+          <div style={{ flex: 1 }}>
+            <iframe src={`${GRAFANA}/d/nginx-vs-envoy/ingress-migration-nginx-vs-envoy?orgId=1&kiosk=tv&refresh=10s&theme=light`} title="grafana" />
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 14, overflowY: "auto" }}>
@@ -273,24 +262,48 @@ function MissionControl() {
   );
 }
 
-function PromQLLibrary() {
+function PrometheusPage() {
+  const [iframeSrc, setIframeSrc] = useState(`${PROM}/targets`);
+  const [activeLabel, setActiveLabel] = useState("targets");
+  const loadQuery = (q, label) => { setIframeSrc(promLink(q)); setActiveLabel(label); };
   return (
-    <div>
-      <PageHeader title="📊 PromQL Library" sub="Click open ↗ to graph in Prometheus, or copy to clipboard." color="var(--purple)" />
-      <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-        {promqlLibrary.map((g, gi) => (
-          <div key={gi} style={{ marginBottom: 24 }}>
-            <div style={{ ...sectionH, color: "var(--purple)" }}>{g.group}</div>
-            {g.items.map((it, i) => (
-              <div key={i} style={{ ...card, display: "grid", gridTemplateColumns: "210px 1fr 80px 80px", gap: 12, alignItems: "center", padding: "10px 14px", marginBottom: 6 }}>
-                <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 500 }}>{it.label}</div>
-                <code style={{ color: "var(--muted)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.q}</code>
-                <a href={promLink(it.q)} target="_blank" style={{ color: "var(--accent)", fontSize: 11, textDecoration: "none", textAlign: "center", border: "1px solid var(--accent)", padding: "3px 0", borderRadius: 4, fontWeight: 500 }}>open ↗</a>
-                <CopyBtn text={it.q} />
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      <PageHeader title="📊 Prometheus" sub="Click a query on the left to load it in the iframe. Or copy to clipboard." color="var(--purple)" />
+      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "420px 1fr", gap: 14, padding: 14, minHeight: 0 }}>
+        <div style={{ ...card, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--muted)", borderBottom: "1px solid var(--line)", background: "var(--panel-alt)", display: "flex", justifyContent: "space-between" }}>
+            <span>Query library</span>
+            <button onClick={() => { setIframeSrc(`${PROM}/targets`); setActiveLabel("targets"); }} style={{ background: "transparent", border: "1px solid var(--line)", color: "var(--muted)", padding: "2px 8px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 4 }}>/targets</button>
+          </div>
+          <div style={{ flex: 1, overflowY: "auto", padding: 12 }}>
+            {promqlLibrary.map((g, gi) => (
+              <div key={gi} style={{ marginBottom: 16 }}>
+                <div style={{ color: "var(--purple)", fontSize: 11, fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>{g.group}</div>
+                {g.items.map((it, i) => {
+                  const on = activeLabel === it.label;
+                  return (
+                    <div key={i} style={{ border: `1px solid ${on ? "var(--purple)" : "var(--line)"}`, borderRadius: 4, padding: "8px 10px", marginBottom: 5, background: on ? "#f5efff" : "var(--panel)", cursor: "pointer" }} onClick={() => loadQuery(it.q, it.label)}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <div style={{ color: "var(--text)", fontSize: 12.5, fontWeight: on ? 600 : 500 }}>{it.label}</div>
+                        <div onClick={(e) => e.stopPropagation()}><CopyBtn text={it.q} /></div>
+                      </div>
+                      <code style={{ display: "block", color: "var(--muted)", fontSize: 10.5, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.q}</code>
+                    </div>
+                  );
+                })}
               </div>
             ))}
           </div>
-        ))}
+        </div>
+        <div style={{ ...card, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--muted)", borderBottom: "1px solid var(--line)", background: "var(--panel-alt)", display: "flex", justifyContent: "space-between" }}>
+            <span>Prometheus — <span style={{ color: "var(--text)", fontWeight: 500 }}>{activeLabel}</span></span>
+            <a href={iframeSrc} target="_blank" style={{ color: "var(--purple)", textDecoration: "none", fontWeight: 500 }}>open ↗</a>
+          </div>
+          <div style={{ flex: 1 }}>
+            <iframe src={iframeSrc} title="prom" />
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -436,13 +449,13 @@ open portal.html`}</pre>
 }
 
 function App() {
-  const [active, setActive] = useState("mission");
+  const [active, setActive] = useState("grafana");
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
       <Sidebar active={active} setActive={setActive} />
       <main style={{ flex: 1, minWidth: 0, overflowY: "auto", height: "100vh" }}>
-        {active === "mission"  && <MissionControl />}
-        {active === "promql"   && <PromQLLibrary />}
+        {active === "grafana"  && <GrafanaPage />}
+        {active === "prom"     && <PrometheusPage />}
         {active === "steps"    && <MigrationSteps />}
         {active === "rollback" && <Rollback />}
         {active === "tools"    && <ToolsCommands />}
