@@ -42,13 +42,18 @@ Two hostnames resolve to the same backend through different controllers:
 ## Quick start
 
 ```bash
-make up           # k3d cluster + all installs + manifests + dashboards
+make up           # k3d cluster + all installs + manifests + envoy tunnel
 make traffic      # background load against both hostnames
 make grafana      # open Grafana at http://localhost:3001  (admin / admin)
 make prom         # open Prometheus at http://localhost:9091
-make demo         # ascii summary + curl-test both paths
+make demo         # curl-test both paths
+make tunnel       # restart the envoy :8082 port-forward (k3d serverlb only forwards one LB)
 make down         # destroy cluster
 ```
+
+### Why two ports work differently
+
+k3d's `serverlb` (klipper-lb) forwards a host port to **one** in-cluster `LoadBalancer` Service per backend port. Ingress-nginx claimed it first, so `http://nginx-demo.localhost:8081/` flows through `serverlb` directly. The Envoy proxy LB never gets a `serverlb` slot, so `make tunnel` keeps a `kubectl port-forward svc/envoy-edge 8082:80` running. `make up` starts it automatically.
 
 Add the demo hostnames once:
 

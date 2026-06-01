@@ -12,7 +12,7 @@ NAMESPACE ?= demo
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-up: cluster image install-monitoring install-nginx install-envoy apply ## End-to-end bootstrap
+up: cluster image install-monitoring install-nginx install-envoy apply tunnel ## End-to-end bootstrap (includes envoy host:8082 tunnel)
 
 cluster: ## Create k3d cluster (Traefik disabled, ports exposed for both ingresses + Grafana + Prom)
 	$(SHOW) "k3d cluster create $(CLUSTER)"
@@ -78,6 +78,20 @@ traffic-stop: ## Stop background load generators
 	@[ -f /tmp/hey-envoy.pid ] && kill $$(cat /tmp/hey-envoy.pid) 2>/dev/null || true
 	@rm -f /tmp/hey-*.pid
 	@echo "load stopped"
+
+tunnel: ## Port-forward envoy-edge to host :8082 (k3d serverlb only forwards to one LB)
+	$(SHOW) "kubectl port-forward envoy-edge :8082"
+	@pkill -f "port-forward.*envoy-edge" 2>/dev/null || true
+	@kubectl -n envoy-gateway-system port-forward svc/envoy-edge 8082:80 > /tmp/envoy-tunnel.log 2>&1 & echo $$! > /tmp/envoy-tunnel.pid
+	@sleep 2
+	@curl -s -o /dev/null -w "envoy-demo.localhost:8082 -> HTTP %{http_code}\n" -H "Host: envoy-demo.localhost" http://localhost:8082/ || echo "tunnel not ready yet, retry: make tunnel"
+	@echo "tunnel pid: $$(cat /tmp/envoy-tunnel.pid)  log: /tmp/envoy-tunnel.log"
+
+tunnel-stop: ## Stop the envoy port-forward
+	@[ -f /tmp/envoy-tunnel.pid ] && kill $$(cat /tmp/envoy-tunnel.pid) 2>/dev/null || true
+	@pkill -f "port-forward.*envoy-edge" 2>/dev/null || true
+	@rm -f /tmp/envoy-tunnel.pid
+	@echo "tunnel stopped"
 
 grafana: ## Open Grafana
 	@open http://localhost:3001 || xdg-open http://localhost:3001 || true
