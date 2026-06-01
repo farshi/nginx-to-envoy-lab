@@ -44,6 +44,7 @@ const { useState } = React;
 
 const GRAFANA = "http://localhost:3001";
 const PROM    = "http://localhost:9091";
+const ARGOCD  = "http://localhost:8083";
 
 const promqlLibrary = [
   { group: "RED · Rate", items: [
@@ -140,10 +141,12 @@ const rollbackLevels = [
 ];
 
 const localTools = [
-  { name: "Grafana",     url: "http://localhost:3001",                note: "admin / admin · dashboard: Ingress Migration — nginx vs Envoy" },
+  { name: "Grafana",     url: "http://localhost:3001",                note: "anonymous admin · dashboard: Ingress Migration — nginx vs Envoy" },
   { name: "Prometheus",  url: "http://localhost:9091",                note: "/targets to confirm scrape health" },
+  { name: "ArgoCD",      url: "http://localhost:8083",                note: "anonymous admin · GitOps for manifests/ tree (run: make argocd-ui)" },
+  { name: "Portal",      url: "http://portal.localhost:8081/",        note: "this page, served from in-cluster nginx (needs /etc/hosts)" },
   { name: "nginx path",  url: "http://nginx-demo.localhost:8081/",    note: "needs /etc/hosts line" },
-  { name: "envoy path",  url: "http://envoy-demo.localhost:8082/",    note: "via kubectl port-forward if k3d serverlb dual-bind fails" },
+  { name: "envoy path",  url: "http://envoy-demo.localhost:8082/",    note: "via make tunnel — k3d serverlb only forwards one LB" },
   { name: "GitHub repo", url: "https://github.com/farshi/nginx-to-envoy-lab", note: "public source" },
 ];
 
@@ -191,6 +194,7 @@ function Sidebar({ active, setActive }) {
   const tabs = [
     { id: "grafana",  label: "Grafana",          emoji: "📈", color: "var(--accent)" },
     { id: "prom",     label: "Prometheus",       emoji: "📊", color: "var(--purple)" },
+    { id: "argocd",   label: "ArgoCD",           emoji: "🚀", color: "#ef7b4d"       },
     { id: "steps",    label: "Migration Steps",  emoji: "🛣️", color: "var(--teal)"   },
     { id: "rollback", label: "Rollback",         emoji: "↩️", color: "var(--err)"    },
     { id: "tools",    label: "Tools & Commands", emoji: "🛠️", color: "var(--amber)"  },
@@ -333,6 +337,50 @@ function PrometheusPage() {
           </div>
           <div style={{ flex: 1 }}>
             <iframe src={iframeSrc} title="prom" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ArgoCDPage() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      <PageHeader title="🚀 ArgoCD" sub="GitOps reconciliation of manifests/ — live application tree, sync + health badges." color="#ef7b4d" />
+      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 320px", gap: 14, padding: 14, minHeight: 0 }}>
+        <div style={{ ...card, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--muted)", borderBottom: "1px solid var(--line)", background: "var(--panel-alt)" }}>
+            Application: <span style={{ color: "var(--text)", fontWeight: 500 }}>nginx-to-envoy-lab</span>
+            <a href={`${ARGOCD}/applications/argocd/nginx-to-envoy-lab`} target="_blank" style={{ float: "right", color: "#ef7b4d", textDecoration: "none", fontWeight: 500 }}>open ↗</a>
+          </div>
+          <div style={{ flex: 1 }}>
+            <iframe src={`${ARGOCD}/applications/argocd/nginx-to-envoy-lab?view=tree&resource=`} title="argocd" />
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, overflowY: "auto" }}>
+          <div style={{ ...card, padding: 16 }}>
+            <div style={sectionH}>What ArgoCD does here</div>
+            <ul style={{ margin: 0, paddingLeft: 18, color: "var(--text)", fontSize: 13, lineHeight: 1.7 }}>
+              <li>Watches this repo's <code>manifests/</code> tree.</li>
+              <li>Auto-syncs, self-heals, prunes deleted resources.</li>
+              <li>Application-layer only — Helm pieces (nginx, envoy, kube-prometheus-stack) stay in the Makefile bootstrap.</li>
+              <li>Push to <code>main</code> → ArgoCD reconciles within ~30s.</li>
+            </ul>
+          </div>
+          <div style={{ ...card, padding: 16 }}>
+            <div style={sectionH}>Quick links</div>
+            <a href={`${ARGOCD}/applications`} target="_blank" style={{ display: "block", padding: "6px 0", color: "var(--text)", fontSize: 13, textDecoration: "none" }}>▸ All Applications</a>
+            <a href={`${ARGOCD}/settings`}     target="_blank" style={{ display: "block", padding: "6px 0", color: "var(--text)", fontSize: 13, textDecoration: "none" }}>▸ Settings (Repos, Clusters, Projects)</a>
+            <a href={`${ARGOCD}/applications/argocd/nginx-to-envoy-lab?view=network`} target="_blank" style={{ display: "block", padding: "6px 0", color: "var(--text)", fontSize: 13, textDecoration: "none" }}>▸ Network view</a>
+          </div>
+          <div style={{ ...card, padding: 16, background: "#fff7ed", borderColor: "#fed7aa" }}>
+            <div style={{ ...sectionH, color: "#9a3412" }}>Iframe not loading?</div>
+            <div style={{ fontSize: 12, color: "var(--text)", lineHeight: 1.6 }}>
+              The ArgoCD UI port-forward must be running. From a shell:
+              <pre style={{ background: "var(--panel)", border: "1px solid var(--line)", padding: 8, borderRadius: 4, fontSize: 11, marginTop: 6, marginBottom: 0 }}>make argocd-ui</pre>
+              If the iframe is still blank, ArgoCD's frame-ancestors policy may block embedding. Use the <b>open ↗</b> link above to launch in a new tab.
+            </div>
           </div>
         </div>
       </div>
@@ -487,6 +535,7 @@ function App() {
       <main style={{ flex: 1, minWidth: 0, overflowY: "auto", height: "100vh" }}>
         {active === "grafana"  && <GrafanaPage />}
         {active === "prom"     && <PrometheusPage />}
+        {active === "argocd"   && <ArgoCDPage />}
         {active === "steps"    && <MigrationSteps />}
         {active === "rollback" && <Rollback />}
         {active === "tools"    && <ToolsCommands />}

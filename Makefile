@@ -114,6 +114,8 @@ argocd-install: ## Install ArgoCD via Helm (anonymous admin enabled — LOCAL LA
 		-n argocd --create-namespace \
 		--set configs.params."server\.insecure"=true \
 		--set 'configs.cm.users\.anonymous\.enabled=true' \
+		--set 'configs.cm.server\.x\.frame\.options=' \
+		--set 'configs.cm.server\.content\.security\.policy=' \
 		--set 'configs.rbac.policy\.default=role:admin' \
 		--wait
 	@kubectl -n argocd rollout status deploy/argocd-server --timeout=180s

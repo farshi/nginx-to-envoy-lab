@@ -13,56 +13,107 @@ data:
       "title": "Ingress Migration — nginx vs Envoy",
       "tags": ["migration","ingress","envoy"],
       "schemaVersion": 39,
-      "version": 1,
+      "version": 2,
       "refresh": "10s",
       "time": { "from": "now-30m", "to": "now" },
       "templating": { "list": [] },
       "panels": [
         {
-          "type": "timeseries", "title": "Request rate (req/s)",
-          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+          "type": "row", "title": "Rate — req/s (R in RED)", "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "panels": []
+        },
+        {
+          "type": "timeseries", "title": "nginx — req/s",
+          "description": "Request rate through the ingress-nginx controller. Should track the load generator. Baseline that envoy will be compared against during cutover.",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "reqps" } },
           "targets": [
-            { "expr": "sum(rate(nginx_ingress_controller_requests[1m]))", "legendFormat": "nginx" },
+            { "expr": "sum(rate(nginx_ingress_controller_requests[1m]))", "legendFormat": "nginx" }
+          ]
+        },
+        {
+          "type": "timeseries", "title": "envoy — req/s",
+          "description": "Request rate through the Envoy proxy. Curve shape should match nginx during shadow + ramp phases.",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "reqps" } },
+          "targets": [
             { "expr": "sum(rate(envoy_cluster_upstream_rq_total[1m]))", "legendFormat": "envoy" }
           ]
         },
         {
-          "type": "timeseries", "title": "Error rate — 5xx %",
-          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
-          "fieldConfig": { "defaults": { "unit": "percentunit" } },
+          "type": "row", "title": "Errors — 5xx % (E in RED)", "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }, "panels": []
+        },
+        {
+          "type": "timeseries", "title": "nginx — 5xx %",
+          "description": "Error rate baseline. The cutover SLO is: envoy 5xx % ≤ this value + 0.1 %. Above that = auto rollback.",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "percentunit", "min": 0 } },
           "targets": [
-            { "expr": "sum(rate(nginx_ingress_controller_requests{status=~\"5..\"}[1m])) / sum(rate(nginx_ingress_controller_requests[1m]))", "legendFormat": "nginx 5xx" },
+            { "expr": "sum(rate(nginx_ingress_controller_requests{status=~\"5..\"}[1m])) / sum(rate(nginx_ingress_controller_requests[1m]))", "legendFormat": "nginx 5xx" }
+          ]
+        },
+        {
+          "type": "timeseries", "title": "envoy — 5xx %",
+          "description": "Cutover gate: this must stay below the nginx baseline + 0.1 %. Spike = pause the ramp, investigate, rollback if not understood within 5 min.",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "percentunit", "min": 0 } },
+          "targets": [
             { "expr": "sum(rate(envoy_cluster_upstream_rq_xx{envoy_response_code_class=\"5\"}[1m])) / sum(rate(envoy_cluster_upstream_rq_total[1m]))", "legendFormat": "envoy 5xx" }
           ]
         },
         {
-          "type": "timeseries", "title": "Latency p99 (seconds)",
-          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
-          "fieldConfig": { "defaults": { "unit": "s" } },
+          "type": "row", "title": "Latency — p99 (D in RED)", "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }, "panels": []
+        },
+        {
+          "type": "timeseries", "title": "nginx — p99 latency",
+          "description": "99th-percentile request duration through nginx — baseline for the latency gate.",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "s" } },
           "targets": [
-            { "expr": "histogram_quantile(0.99, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "nginx p99" },
+            { "expr": "histogram_quantile(0.99, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "nginx p99" }
+          ]
+        },
+        {
+          "type": "timeseries", "title": "envoy — p99 latency",
+          "description": "Cutover gate: envoy p99 ≤ nginx p99 × 1.10. Above = auto rollback. Compare visually with the nginx panel on the left.",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "s" } },
+          "targets": [
             { "expr": "histogram_quantile(0.99, sum(rate(envoy_cluster_upstream_rq_time_bucket[5m])) by (le))", "legendFormat": "envoy p99" }
           ]
         },
         {
-          "type": "stat", "title": "Envoy xDS sync (1 = connected)",
-          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 24 },
+          "type": "row", "title": "Envoy-specific signals (cutover blockers)", "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 }, "panels": []
+        },
+        {
+          "type": "stat", "title": "xDS connected",
+          "description": "1 = control plane is delivering config. 0 = traffic still flows on last-known-good, but cutover paused.",
+          "gridPos": { "h": 5, "w": 6, "x": 0, "y": 28 },
+          "fieldConfig": { "defaults": { "mappings": [ { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } } ] } },
           "targets": [{ "expr": "max(envoy_control_plane_connected_state)" }]
         },
         {
-          "type": "stat", "title": "Envoy outlier ejections (active)",
-          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 24 },
+          "type": "stat", "title": "healthy upstream endpoints",
+          "description": "Pods Envoy currently considers healthy. Must match the live demo-api pod count.",
+          "gridPos": { "h": 5, "w": 6, "x": 6, "y": 28 },
+          "targets": [{ "expr": "sum(envoy_cluster_membership_healthy)" }]
+        },
+        {
+          "type": "stat", "title": "outlier ejections (active)",
+          "description": "Endpoints Envoy auto-ejected for 5xx or high latency. Non-zero = upstream problem, do not ramp.",
+          "gridPos": { "h": 5, "w": 6, "x": 12, "y": 28 },
+          "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
           "targets": [{ "expr": "sum(envoy_cluster_outlier_detection_ejections_active)" }]
         },
         {
-          "type": "stat", "title": "Envoy CB overflow (UO 503s)",
-          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 24 },
+          "type": "stat", "title": "circuit-breaker overflow (UO/sec)",
+          "description": "Rate of requests fast-failed because cluster CB limits were hit. Non-zero = CB too tight for the offered load.",
+          "gridPos": { "h": 5, "w": 6, "x": 18, "y": 28 },
+          "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 0.1 } ] } } },
           "targets": [{ "expr": "sum(rate(envoy_cluster_upstream_cx_overflow[5m]))" }]
-        },
-        {
-          "type": "stat", "title": "Healthy upstream endpoints",
-          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 24 },
-          "targets": [{ "expr": "sum(envoy_cluster_membership_healthy)" }]
         }
       ]
     }
