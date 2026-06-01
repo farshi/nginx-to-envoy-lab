@@ -58,7 +58,19 @@ k3d's `serverlb` (klipper-lb) forwards a host port to **one** in-cluster `LoadBa
 Add the demo hostnames once:
 
 ```bash
-echo "127.0.0.1 nginx-demo.localhost envoy-demo.localhost" | sudo tee -a /etc/hosts
+echo "127.0.0.1 nginx-demo.localhost envoy-demo.localhost portal.localhost" | sudo tee -a /etc/hosts
+```
+
+The **portal** (single-page mission control with embedded Grafana / Prom / migration steps) is served from inside the cluster after `make up`:
+
+```
+http://portal.localhost:8081/
+```
+
+To rebuild the portal after editing `portal.html` locally:
+
+```bash
+make portal      # re-create ConfigMap from portal.html and restart the pod
 ```
 
 ## What to look at in Grafana

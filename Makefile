@@ -58,13 +58,26 @@ install-monitoring: ## Install kube-prometheus-stack (Prometheus + Grafana)
 		-f observability/kube-prometheus-stack-values.yaml \
 		--wait
 
-apply: ## Apply all lab manifests (demo + nginx + envoy + loadgen + dashboard)
+apply: portal-configmap ## Apply all lab manifests (demo + nginx + envoy + loadgen + dashboard + portal)
 	$(SHOW) "kubectl apply manifests"
 	@kubectl apply -f manifests/demo/
 	@kubectl apply -f manifests/nginx/
 	@kubectl apply -f manifests/envoy/
 	@kubectl apply -f manifests/loadgen/
+	@kubectl apply -f manifests/portal/
 	@kubectl apply -f dashboards/
+
+portal-configmap: ## (Re)create the portal-html ConfigMap from local portal.html
+	@kubectl create namespace $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+	@kubectl -n $(NAMESPACE) create configmap portal-html \
+		--from-file=portal.html=portal.html \
+		--dry-run=client -o yaml | kubectl apply -f -
+
+portal: portal-configmap ## Update portal-html ConfigMap and bounce the portal pod
+	@kubectl apply -f manifests/portal/
+	@kubectl -n $(NAMESPACE) rollout restart deploy/portal 2>/dev/null || true
+	@kubectl -n $(NAMESPACE) rollout status deploy/portal --timeout=60s
+	@echo "portal http://portal.localhost:8081/   (needs /etc/hosts line)"
 
 traffic: ## Run external traffic against both hostnames (requires `hey`)
 	$(SHOW) "hey load on nginx + envoy"
