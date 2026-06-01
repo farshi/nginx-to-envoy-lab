@@ -106,15 +106,18 @@ tunnel-stop: ## Stop the envoy port-forward
 	@rm -f /tmp/envoy-tunnel.pid
 	@echo "tunnel stopped"
 
-argocd-install: ## Install ArgoCD via Helm
+argocd-install: ## Install ArgoCD via Helm (anonymous admin enabled — LOCAL LAB ONLY)
 	$(SHOW) "helm install argocd"
 	@helm repo add argo https://argoproj.github.io/argo-helm >/dev/null 2>&1 || true
 	@helm repo update >/dev/null
 	@helm upgrade --install argocd argo/argo-cd \
 		-n argocd --create-namespace \
 		--set configs.params."server\.insecure"=true \
+		--set 'configs.cm.users\.anonymous\.enabled=true' \
+		--set 'configs.rbac.policy\.default=role:admin' \
 		--wait
 	@kubectl -n argocd rollout status deploy/argocd-server --timeout=180s
+	@echo "ArgoCD UI is open to anonymous admin — never use this config off a local lab."
 
 argocd-app: ## Apply the Application CR (points at this repo's manifests/)
 	@kubectl apply -f manifests/argocd/application.yaml
@@ -123,17 +126,14 @@ argocd-app: ## Apply the Application CR (points at this repo's manifests/)
 	@kubectl -n argocd get application nginx-to-envoy-lab \
 		-o custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status
 
-argocd-ui: ## Port-forward ArgoCD UI to :8083 + print admin password
+argocd-ui: ## Port-forward ArgoCD UI to :8083 (anonymous access — no login needed)
 	@pkill -f "port-forward.*argocd-server" 2>/dev/null || true
 	@kubectl -n argocd port-forward svc/argocd-server 8083:80 > /tmp/argocd-pf.log 2>&1 & \
 		echo $$! > /tmp/argocd-pf.pid
 	@sleep 2
 	@echo
-	@echo "ArgoCD UI   http://localhost:8083"
-	@echo "user:       admin"
-	@printf "password:   "
-	@kubectl -n argocd get secret argocd-initial-admin-secret \
-		-o jsonpath='{.data.password}' | base64 -d; echo
+	@echo "ArgoCD UI   http://localhost:8083   (anonymous admin — no login)"
+	@open http://localhost:8083 2>/dev/null || xdg-open http://localhost:8083 2>/dev/null || true
 
 argocd-stop: ## Stop the ArgoCD UI port-forward
 	@[ -f /tmp/argocd-pf.pid ] && kill $$(cat /tmp/argocd-pf.pid) 2>/dev/null || true

@@ -9,9 +9,20 @@ grafana:
   service:
     type: NodePort
     nodePort: 30300
+  # Local lab: skip the login screen entirely. Anonymous = Admin. NEVER off-laptop.
   grafana.ini:
     security:
       allow_embedding: true
+      # let iframes load Grafana cross-origin (the portal embeds it)
+      cookie_samesite: none
+      cookie_secure: false
+    auth:
+      disable_login_form: true
+      disable_signout_menu: true
+    auth.anonymous:
+      enabled: true
+      org_name: "Main Org."
+      org_role: Admin
   sidecar:
     dashboards:
       enabled: true
