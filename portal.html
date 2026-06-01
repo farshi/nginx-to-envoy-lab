@@ -47,31 +47,48 @@ const PROM    = "http://localhost:9091";
 
 const promqlLibrary = [
   { group: "RED · Rate", items: [
-    { label: "nginx — req/s",        q: "sum(rate(nginx_ingress_controller_requests[1m]))" },
-    { label: "envoy — req/s",        q: "sum(rate(envoy_cluster_upstream_rq_total[1m]))" },
-    { label: "demo-api — req/s",     q: "sum(rate(http_requests_total{service=\"demo-api\"}[1m]))" },
+    { label: "nginx — req/s",    q: "sum(rate(nginx_ingress_controller_requests[1m]))",
+      desc: "Total requests per second hitting the ingress-nginx controller, summed across all instances. Should track the load generator." },
+    { label: "envoy — req/s",    q: "sum(rate(envoy_cluster_upstream_rq_total[1m]))",
+      desc: "Total requests per second the Envoy proxies forwarded to upstream clusters. Compare side-by-side with the nginx rate during migration." },
+    { label: "demo-api — req/s", q: "sum(rate(http_requests_total{service=\"demo-api\"}[1m]))",
+      desc: "Requests per second the Flask demo-api itself handled. Should equal nginx+envoy combined (minus health probes)." },
   ]},
   { group: "RED · Errors", items: [
-    { label: "nginx 5xx %",          q: "sum(rate(nginx_ingress_controller_requests{status=~\"5..\"}[1m])) / sum(rate(nginx_ingress_controller_requests[1m]))" },
-    { label: "envoy 5xx %",          q: "sum(rate(envoy_cluster_upstream_rq_xx{envoy_response_code_class=\"5\"}[1m])) / sum(rate(envoy_cluster_upstream_rq_total[1m]))" },
-    { label: "envoy 5xx absolute",   q: "sum(rate(envoy_cluster_upstream_rq_xx{envoy_response_code_class=\"5\"}[1m]))" },
+    { label: "nginx 5xx %", q: "sum(rate(nginx_ingress_controller_requests{status=~\"5..\"}[1m])) / sum(rate(nginx_ingress_controller_requests[1m]))",
+      desc: "Server-error rate (5xx) through nginx as a fraction of all nginx requests. Baseline for the migration SLO gate." },
+    { label: "envoy 5xx %", q: "sum(rate(envoy_cluster_upstream_rq_xx{envoy_response_code_class=\"5\"}[1m])) / sum(rate(envoy_cluster_upstream_rq_total[1m]))",
+      desc: "Same signal on the Envoy side. Cutover SLO: Envoy 5xx% ≤ nginx baseline + 0.1%. Above = auto rollback." },
+    { label: "envoy 5xx absolute", q: "sum(rate(envoy_cluster_upstream_rq_xx{envoy_response_code_class=\"5\"}[1m]))",
+      desc: "Raw 5xx-per-second through Envoy. Useful when a low percentage hides a real volume spike." },
   ]},
   { group: "RED · Latency", items: [
-    { label: "nginx p99",            q: "histogram_quantile(0.99, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket[5m])) by (le))" },
-    { label: "envoy p99",            q: "histogram_quantile(0.99, sum(rate(envoy_cluster_upstream_rq_time_bucket[5m])) by (le))" },
-    { label: "demo-api p99",         q: "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))" },
+    { label: "nginx p99", q: "histogram_quantile(0.99, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket[5m])) by (le))",
+      desc: "99th-percentile request latency through nginx, computed from the histogram bucket counters over a 5m window." },
+    { label: "envoy p99", q: "histogram_quantile(0.99, sum(rate(envoy_cluster_upstream_rq_time_bucket[5m])) by (le))",
+      desc: "Envoy's 99th-percentile upstream request time. Cutover SLO: Envoy p99 ≤ nginx p99 × 1.10." },
+    { label: "demo-api p99", q: "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))",
+      desc: "App-level p99 (inside the Flask handler). Differs from ingress p99 by the proxy overhead — useful to attribute slowness." },
   ]},
   { group: "Envoy — health & xDS", items: [
-    { label: "xDS connected (1=up)",       q: "max(envoy_control_plane_connected_state)" },
-    { label: "healthy upstream endpoints", q: "sum(envoy_cluster_membership_healthy)" },
-    { label: "outlier ejections (active)", q: "sum(envoy_cluster_outlier_detection_ejections_active)" },
-    { label: "circuit breaker overflow",   q: "sum(rate(envoy_cluster_upstream_cx_overflow[5m]))" },
-    { label: "active upstream conns",      q: "sum(envoy_cluster_upstream_cx_active)" },
+    { label: "xDS connected (1=up)", q: "max(envoy_control_plane_connected_state)",
+      desc: "1 = at least one Envoy proxy currently has a healthy gRPC stream to the control plane. 0 = config delivery broken, last-known-good still serving." },
+    { label: "healthy upstream endpoints", q: "sum(envoy_cluster_membership_healthy)",
+      desc: "Total upstream pod endpoints Envoy currently considers healthy across all clusters. Should match the live pod count for the demo-api Service." },
+    { label: "outlier ejections (active)", q: "sum(envoy_cluster_outlier_detection_ejections_active)",
+      desc: "Endpoints Envoy has auto-ejected for consecutive 5xx or high latency. Non-zero in steady state = a real backend problem to investigate before ramping." },
+    { label: "circuit breaker overflow", q: "sum(rate(envoy_cluster_upstream_cx_overflow[5m]))",
+      desc: "Rate of requests Envoy fast-failed because cluster connection / pending limits were hit (UO response flag). Non-zero = CB thresholds too tight for the load." },
+    { label: "active upstream conns", q: "sum(envoy_cluster_upstream_cx_active)",
+      desc: "Current open connections from Envoy to upstream pods. Helps spot connection pool exhaustion or leak." },
   ]},
   { group: "Resource cost", items: [
-    { label: "envoy memory (MiB)",  q: "container_memory_working_set_bytes{pod=~\".*envoy.*\"} / 1024 / 1024" },
-    { label: "nginx memory (MiB)",  q: "container_memory_working_set_bytes{pod=~\".*ingress-nginx.*\"} / 1024 / 1024" },
-    { label: "envoy CPU throttle",  q: "rate(container_cpu_cfs_throttled_seconds_total{pod=~\".*envoy.*\"}[5m])" },
+    { label: "envoy memory (MiB)", q: "container_memory_working_set_bytes{pod=~\".*envoy.*\"} / 1024 / 1024",
+      desc: "Working-set memory of each Envoy proxy container in MiB. Envoy uses more RAM than nginx — watch for regression during ramp." },
+    { label: "nginx memory (MiB)", q: "container_memory_working_set_bytes{pod=~\".*ingress-nginx.*\"} / 1024 / 1024",
+      desc: "Working-set memory of the ingress-nginx controller container in MiB. The baseline you compare Envoy against." },
+    { label: "envoy CPU throttle", q: "rate(container_cpu_cfs_throttled_seconds_total{pod=~\".*envoy.*\"}[5m])",
+      desc: "Seconds-per-second the kernel throttled the Envoy container because it hit its CPU limit. Non-zero = limit is too tight, raise it." },
   ]},
 ];
 
@@ -263,9 +280,17 @@ function GrafanaPage() {
 }
 
 function PrometheusPage() {
-  const [iframeSrc, setIframeSrc] = useState(`${PROM}/targets`);
+  const [iframeSrc,   setIframeSrc]   = useState(`${PROM}/targets`);
   const [activeLabel, setActiveLabel] = useState("targets");
-  const loadQuery = (q, label) => { setIframeSrc(promLink(q)); setActiveLabel(label); };
+  const [activeDesc,  setActiveDesc]  = useState("Active scrape targets — confirms nginx, envoy and demo-api are all UP.");
+  const [activeQuery, setActiveQuery] = useState("");
+  const loadQuery = (q, label, desc) => { setIframeSrc(promLink(q)); setActiveLabel(label); setActiveDesc(desc); setActiveQuery(q); };
+  const resetToTargets = () => {
+    setIframeSrc(`${PROM}/targets`);
+    setActiveLabel("targets");
+    setActiveDesc("Active scrape targets — confirms nginx, envoy and demo-api are all UP.");
+    setActiveQuery("");
+  };
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <PageHeader title="📊 Prometheus" sub="Click a query on the left to load it in the iframe. Or copy to clipboard." color="var(--purple)" />
@@ -273,7 +298,7 @@ function PrometheusPage() {
         <div style={{ ...card, overflow: "hidden", display: "flex", flexDirection: "column" }}>
           <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--muted)", borderBottom: "1px solid var(--line)", background: "var(--panel-alt)", display: "flex", justifyContent: "space-between" }}>
             <span>Query library</span>
-            <button onClick={() => { setIframeSrc(`${PROM}/targets`); setActiveLabel("targets"); }} style={{ background: "transparent", border: "1px solid var(--line)", color: "var(--muted)", padding: "2px 8px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 4 }}>/targets</button>
+            <button onClick={resetToTargets} style={{ background: "transparent", border: "1px solid var(--line)", color: "var(--muted)", padding: "2px 8px", fontSize: 11, fontFamily: "inherit", cursor: "pointer", borderRadius: 4 }}>/targets</button>
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: 12 }}>
             {promqlLibrary.map((g, gi) => (
@@ -282,7 +307,7 @@ function PrometheusPage() {
                 {g.items.map((it, i) => {
                   const on = activeLabel === it.label;
                   return (
-                    <div key={i} style={{ border: `1px solid ${on ? "var(--purple)" : "var(--line)"}`, borderRadius: 4, padding: "8px 10px", marginBottom: 5, background: on ? "#f5efff" : "var(--panel)", cursor: "pointer" }} onClick={() => loadQuery(it.q, it.label)}>
+                    <div key={i} style={{ border: `1px solid ${on ? "var(--purple)" : "var(--line)"}`, borderRadius: 4, padding: "8px 10px", marginBottom: 5, background: on ? "#f5efff" : "var(--panel)", cursor: "pointer" }} onClick={() => loadQuery(it.q, it.label, it.desc)}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                         <div style={{ color: "var(--text)", fontSize: 12.5, fontWeight: on ? 600 : 500 }}>{it.label}</div>
                         <div onClick={(e) => e.stopPropagation()}><CopyBtn text={it.q} /></div>
@@ -296,9 +321,15 @@ function PrometheusPage() {
           </div>
         </div>
         <div style={{ ...card, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-          <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--muted)", borderBottom: "1px solid var(--line)", background: "var(--panel-alt)", display: "flex", justifyContent: "space-between" }}>
-            <span>Prometheus — <span style={{ color: "var(--text)", fontWeight: 500 }}>{activeLabel}</span></span>
-            <a href={iframeSrc} target="_blank" style={{ color: "var(--purple)", textDecoration: "none", fontWeight: 500 }}>open ↗</a>
+          <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line)", background: "var(--panel-alt)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 12, color: "var(--muted)" }}>
+              <span>Prometheus — <span style={{ color: "var(--text)", fontWeight: 600, fontSize: 13 }}>{activeLabel}</span></span>
+              <a href={iframeSrc} target="_blank" style={{ color: "var(--purple)", textDecoration: "none", fontWeight: 500 }}>open ↗</a>
+            </div>
+            <div style={{ marginTop: 6, fontSize: 12, color: "var(--text)", lineHeight: 1.5 }}>{activeDesc}</div>
+            {activeQuery && (
+              <code style={{ display: "block", marginTop: 6, fontSize: 11, color: "var(--purple)", background: "var(--panel)", border: "1px solid var(--line)", padding: "4px 8px", borderRadius: 3, wordBreak: "break-all" }}>{activeQuery}</code>
+            )}
           </div>
           <div style={{ flex: 1 }}>
             <iframe src={iframeSrc} title="prom" />
