@@ -101,6 +101,7 @@ scripts/       bootstrap.sh and helpers
 | [`docs/ROLLOUT.md`](docs/ROLLOUT.md) | Phase-by-phase rollout playbook with shadow, weighted ramp, and four-level rollback |
 | [`docs/MIGRATION_SUCCESS.md`](docs/MIGRATION_SUCCESS.md) | The SLO gates that decide whether a step advances or rolls back |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Control plane vs data plane, why Gateway API over frozen Ingress |
+| [`docs/INSTRUMENTATION.md`](docs/INSTRUMENTATION.md) | How the Flask demo-api emits Prometheus metrics — Counter/Histogram, /metrics endpoint, ServiceMonitor wiring, gotchas (cardinality, multi-process workers, histogram buckets) |
 | [`docs/aws-eks.md`](docs/aws-eks.md) | EKS specifics — bare-cluster defaults, AWS Load Balancer Controller, IRSA, Karpenter |
 | [`docs/azure-aks.md`](docs/azure-aks.md) | AKS specifics — AGIC vs AGC, Workload Identity, managed Istio add-on |
 | [`docs/gcp-gke.md`](docs/gcp-gke.md) | GKE specifics — GKE Gateway (Envoy under the hood), NEGs, Workload Identity Federation |
