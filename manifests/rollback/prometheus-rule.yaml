@@ -1,0 +1,39 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: envoy-canary-rollback
+  namespace: monitoring
+  labels:
+    release: kps   # must match kube-prometheus-stack Helm release name
+spec:
+  groups:
+    - name: canary-health
+      interval: 30s
+      rules:
+        - alert: EnvoyCanaryHighErrorRate
+          expr: |
+            (
+              sum(rate(envoy_http_downstream_rq_xx{response_code_class="5"}[2m]))
+              /
+              sum(rate(envoy_http_downstream_rq_total[2m]))
+            ) > 0.05
+          for: 1m
+          labels:
+            severity: critical
+            action: rollback
+          annotations:
+            summary: "Envoy canary error rate above 5%"
+            description: "Error rate {{ $value | humanizePercentage }} — trigger rollback."
+
+        - alert: EnvoyCanaryHighLatency
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(envoy_http_downstream_rq_time_bucket[2m])) by (le)
+            ) * 1000 > 2000
+          for: 1m
+          labels:
+            severity: critical
+            action: rollback
+          annotations:
+            summary: "Envoy canary p99 latency above 2000ms"
+            description: "p99 latency {{ $value }}ms — trigger rollback."

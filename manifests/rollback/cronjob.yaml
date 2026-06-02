@@ -1,0 +1,89 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: canary-watchdog
+  namespace: demo
+  labels:
+    app: canary-watchdog
+spec:
+  schedule: "* * * * *"       # poll every minute
+  concurrencyPolicy: Forbid   # never overlap runs
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 55   # kill if still running at next tick
+      template:
+        spec:
+          serviceAccountName: canary-watchdog
+          restartPolicy: Never
+          containers:
+            - name: watchdog
+              image: bitnami/kubectl:latest
+              env:
+                - name: PROM_URL
+                  value: "http://kps-kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
+                - name: ERROR_THRESHOLD
+                  value: "0.05"   # 5 % — trigger rollback above this
+                - name: LATENCY_THRESHOLD_MS
+                  value: "2000"   # p99 > 2000ms also triggers rollback
+                - name: ROLLBACK_MODE
+                  value: "--delete"   # or --reweight
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+
+                  # ── query Prometheus ────────────────────────────────────────
+                  query() {
+                    curl -sf "${PROM_URL}/api/v1/query" \
+                      --data-urlencode "query=$1" \
+                      | sed 's/.*"value":\[[^,]*,"\([^"]*\)".*/\1/'
+                  }
+
+                  ERROR_RATE=$(query \
+                    'sum(rate(envoy_http_downstream_rq_xx{response_code_class="5"}[2m])) / sum(rate(envoy_http_downstream_rq_total[2m]))' \
+                    2>/dev/null || echo "0")
+
+                  P99_MS=$(query \
+                    'histogram_quantile(0.99, sum(rate(envoy_http_downstream_rq_time_bucket[2m])) by (le)) * 1000' \
+                    2>/dev/null || echo "0")
+
+                  echo "envoy error_rate=${ERROR_RATE}  p99=${P99_MS}ms  (thresholds: err=${ERROR_THRESHOLD} p99=${LATENCY_THRESHOLD_MS}ms)"
+
+                  # ── check thresholds ────────────────────────────────────────
+                  BREACH=false
+
+                  if awk "BEGIN { exit !( ${ERROR_RATE} > ${ERROR_THRESHOLD} ) }"; then
+                    echo "BREACH: error rate ${ERROR_RATE} > ${ERROR_THRESHOLD}"
+                    BREACH=true
+                  fi
+
+                  if awk "BEGIN { exit !( ${P99_MS} > ${LATENCY_THRESHOLD_MS} ) }"; then
+                    echo "BREACH: p99 latency ${P99_MS}ms > ${LATENCY_THRESHOLD_MS}ms"
+                    BREACH=true
+                  fi
+
+                  if [ "$BREACH" = "false" ]; then
+                    echo "OK — no breach, canary healthy"
+                    exit 0
+                  fi
+
+                  # ── rollback ────────────────────────────────────────────────
+                  echo "ROLLING BACK — mode=${ROLLBACK_MODE}"
+
+                  kubectl get httproute -A -l migration=canary \
+                    -o custom-columns="NS:.metadata.namespace,NAME:.metadata.name" --no-headers \
+                  | while read -r ns name; do
+                    if [ "${ROLLBACK_MODE}" = "--delete" ]; then
+                      echo "  deleting httproute $ns/$name"
+                      kubectl delete httproute "$name" -n "$ns" --ignore-not-found
+                    else
+                      echo "  reweighting httproute $ns/$name"
+                      kubectl patch httproute "$name" -n "$ns" --type=merge \
+                        -p '{"spec":{"rules":[{"backendRefs":[{"group":"","kind":"Service","weight":100},{"group":"","kind":"Service","weight":0}]}]}}'
+                    fi
+                  done
+
+                  echo "ROLLBACK COMPLETE"

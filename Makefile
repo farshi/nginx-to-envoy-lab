@@ -7,7 +7,9 @@ IMAGE_TAG ?= 0.1.0
 NAMESPACE ?= demo
 
 .PHONY: help up cluster image install-nginx install-envoy install-monitoring \
-        apply traffic grafana prom demo down clean
+        apply traffic grafana prom demo down clean \
+        rollback-install rollback-uninstall rollback-test canary-status \
+        annotation-audit translate-annotations
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -435,3 +437,46 @@ demo-help: ## DEMO — show the script in order
 	@echo "  make demo-step4    # open Grafana side-by-side"
 	@echo "  make demo-step5    # explain weighted ramp YAML"
 	@echo "  make demo-step6    # rollback (delete Envoy)"
+
+# ───────────────────────────────────────────────────────────────────
+# AUTO-ROLLBACK — Prometheus-driven watchdog CronJob
+# Label HTTPRoutes with migration=canary to bring them under the watchdog.
+# ───────────────────────────────────────────────────────────────────
+
+rollback-install: ## ROLLBACK — deploy canary watchdog CronJob + RBAC + PrometheusRule
+	$(SHOW) "kubectl apply -f manifests/rollback/"
+	@kubectl apply -f manifests/rollback/rbac.yaml
+	@kubectl apply -f manifests/rollback/prometheus-rule.yaml
+	@kubectl apply -f manifests/rollback/cronjob.yaml
+	@echo "watchdog installed — fires every minute, rolls back if error_rate > 5% or p99 > 2s"
+	@echo "tune thresholds: edit manifests/rollback/cronjob.yaml env ERROR_THRESHOLD / LATENCY_THRESHOLD_MS"
+
+rollback-uninstall: ## ROLLBACK — remove watchdog (leave nginx + envoy running)
+	$(SHOW) "kubectl delete -f manifests/rollback/"
+	@kubectl delete -f manifests/rollback/ --ignore-not-found
+
+rollback-test: ## ROLLBACK — manually trigger rollback script against live cluster (DRY_RUN=true to preview)
+	$(SHOW) "bash scripts/auto-rollback.sh"
+	@bash scripts/auto-rollback.sh $(ROLLBACK_MODE)
+
+canary-status: ## ROLLBACK — show weight split for all canary HTTPRoutes
+	$(SHOW) "kubectl get httproute -A -l migration=canary"
+	@kubectl get httproute -A -l migration=canary \
+	  -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,BACKENDS:.spec.rules[0].backendRefs[*].weight" \
+	  2>/dev/null || echo "(no HTTPRoutes labeled migration=canary)"
+
+# ───────────────────────────────────────────────────────────────────
+# ANNOTATION TRANSLATION — Phase-0 audit + policy stub generation
+# ───────────────────────────────────────────────────────────────────
+
+annotation-audit: ## TRANSLATE — dump all nginx annotations per Ingress (Phase-0 inventory)
+	$(SHOW) "kubectl get ing -A -o json | jq annotation inventory"
+	@kubectl get ing -A -o json | \
+	  jq -r '.items[] | .metadata.namespace + "/" + .metadata.name + " | " + (.metadata.annotations // {} | keys | join(", "))' | \
+	  sort | column -t -s'|'
+
+translate-annotations: ## TRANSLATE — audit annotations + emit BackendTrafficPolicy/SecurityPolicy stubs → manifests/generated/
+	$(SHOW) "bash scripts/translate-annotations.sh"
+	@bash scripts/translate-annotations.sh
+	@echo ""
+	@echo "Review manifests/generated/ then: kubectl apply -f manifests/generated/"
