@@ -79,8 +79,9 @@ portal: portal-configmap ## Update portal-html ConfigMap and bounce the portal p
 	@kubectl -n $(NAMESPACE) rollout status deploy/portal --timeout=60s
 	@echo "portal http://portal.localhost:8081/   (needs /etc/hosts line)"
 
-traffic: ## Run external traffic against both hostnames (requires `hey`)
-	$(SHOW) "hey load on nginx + envoy"
+traffic: ## Run external traffic against both hostnames (~200 req/s each, 30 min)
+	$(SHOW) "hey -z 30m -c 10 -q 20  http://nginx-demo.localhost:8081/   (200 req/s, 30 min)"
+	$(SHOW) "hey -z 30m -c 10 -q 20  http://envoy-demo.localhost:8082/   (200 req/s, 30 min)"
 	@command -v hey >/dev/null || { echo "install hey: brew install hey"; exit 1; }
 	@( hey -z 30m -c 10 -q 20 http://nginx-demo.localhost:8081/ >/dev/null & echo $$! > /tmp/hey-nginx.pid )
 	@( hey -z 30m -c 10 -q 20 http://envoy-demo.localhost:8082/ >/dev/null & echo $$! > /tmp/hey-envoy.pid )
@@ -103,11 +104,11 @@ traffic-resume: ## Restart the in-cluster loadgen (back to 1 replica)
 	@echo "loadgen resumed"
 
 bad-traffic: ## Fire 5xx-only load at /fail through BOTH ingresses (visible spike on the errors panel)
+	$(SHOW) "hey -z 5m -c 5 -q 10  /fail  (5xx storm, ~50 req/s of 500s)"
 	@command -v hey >/dev/null || { echo "install hey: brew install hey"; exit 1; }
 	@( hey -z 5m -c 5 -q 10 http://nginx-demo.localhost:8081/fail >/dev/null & echo $$! > /tmp/hey-nginx-bad.pid )
 	@( hey -z 5m -c 5 -q 10 http://envoy-demo.localhost:8082/fail >/dev/null & echo $$! > /tmp/hey-envoy-bad.pid )
-	@echo "5xx storm running for 5 min on /fail through both ingresses (~50 req/s of 500s each)"
-	@echo "stop early: make bad-traffic-stop"
+	@echo "5xx storm running for 5 min — stop early: make bad-traffic-stop"
 
 bad-traffic-stop: ## Stop the /fail load
 	@[ -f /tmp/hey-nginx-bad.pid ] && kill $$(cat /tmp/hey-nginx-bad.pid) 2>/dev/null || true
@@ -117,11 +118,11 @@ bad-traffic-stop: ## Stop the /fail load
 	@echo "bad traffic stopped"
 
 slow-traffic: ## Fire slow-endpoint load (?seconds=2) — spikes the p99 latency panel
+	$(SHOW) "hey -z 5m -c 3 -q 5  /slow?seconds=2  (latency storm)"
 	@command -v hey >/dev/null || { echo "install hey: brew install hey"; exit 1; }
 	@( hey -z 5m -c 3 -q 5 "http://nginx-demo.localhost:8081/slow?seconds=2" >/dev/null & echo $$! > /tmp/hey-nginx-slow.pid )
 	@( hey -z 5m -c 3 -q 5 "http://envoy-demo.localhost:8082/slow?seconds=2" >/dev/null & echo $$! > /tmp/hey-envoy-slow.pid )
-	@echo "slow-request load running — p99 latency panels will climb toward 2s"
-	@echo "stop early: make slow-traffic-stop"
+	@echo "slow load running — p99 panels will climb toward 2s — stop: make slow-traffic-stop"
 
 slow-traffic-stop: ## Stop the slow-endpoint load
 	@[ -f /tmp/hey-nginx-slow.pid ] && kill $$(cat /tmp/hey-nginx-slow.pid) 2>/dev/null || true
@@ -400,6 +401,30 @@ smoke: ## CURL both ingresses (nginx + envoy) and show response codes
 chaos-show: ## SHOW the chaos kubectl command (no apply)
 	$(SHOW) "kubectl -n demo set env deploy/demo-api ERROR_RATE_PERCENT=10"
 	@echo "  (apply with: make chaos)"
+
+traffic-menu: ## MENU — every traffic / failure target in one screen
+	@printf '\033[1;36m\n── TRAFFIC GENERATORS ──────────────────────────────────────────────\033[0m\n\n'
+	@printf '  \033[32mmake traffic\033[0m            normal load on BOTH ingresses, 200 req/s, 30 min\n'
+	@printf '  \033[32mmake traffic-stop\033[0m       stop host-side hey (loadgen Deployment keeps going)\n'
+	@printf '  \033[32mmake traffic-stop-all\033[0m   stop hey AND scale loadgen Deployment to 0\n'
+	@printf '  \033[32mmake traffic-resume\033[0m     scale loadgen back to 1\n'
+	@printf '  \033[32mmake traffic-status\033[0m     show running heys + loadgen + current req/s per ingress\n'
+	@printf '\033[1;31m\n── FAILURE INJECTION ──────────────────────────────────────────────\033[0m\n\n'
+	@printf '  \033[32mmake bad-traffic\033[0m        hammer /fail (5xx storm) — errors panel spikes\n'
+	@printf '  \033[32mmake bad-traffic-stop\033[0m\n'
+	@printf '  \033[32mmake slow-traffic\033[0m       hammer /slow?seconds=2 — p99 latency climbs\n'
+	@printf '  \033[32mmake slow-traffic-stop\033[0m\n'
+	@printf '  \033[32mmake chaos\033[0m              ERROR_RATE_PERCENT=10 on demo-api — 10pct random 5xx\n'
+	@printf '  \033[32mmake chaos-stop\033[0m         reset to 0 percent\n'
+	@printf '\033[1;33m\n── DEMO COMMANDS (each shows the real kubectl in green) ─────────\033[0m\n\n'
+	@printf '  \033[32mmake audit\033[0m              Phase-0 inventory: ingresses + annotations + hosts\n'
+	@printf '  \033[32mmake envoy-up\033[0m           deploy Envoy parallel to nginx\n'
+	@printf '  \033[32mmake envoy-pods\033[0m         show envoy controller + proxy pods\n'
+	@printf '  \033[32mmake smoke\033[0m              curl both ingresses\n'
+	@printf '  \033[32mmake envoy-down\033[0m         rollback (delete Gateway + HTTPRoute)\n'
+	@printf '  \033[32mmake tunnel\033[0m             port-forward envoy proxy to host:8082\n'
+	@printf '  \033[32mmake envoy-admin\033[0m        port-forward envoy admin to host:19000\n'
+	@echo
 
 demo-help: ## DEMO — show the script in order
 	@echo "Demo run order (one command per step):"
