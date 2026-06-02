@@ -122,6 +122,7 @@ scripts/       bootstrap.sh and helpers
 |---|---|
 | [`docs/WHY_MIGRATE.md`](docs/WHY_MIGRATE.md) | The case for the migration — frozen Ingress API, 2025 CVE pressure, feature gap, comparison table |
 | [`docs/ROLLOUT.md`](docs/ROLLOUT.md) | Phase-by-phase rollout playbook with shadow, weighted ramp, and four-level rollback |
+| [`docs/SHADOW_SAFETY.md`](docs/SHADOW_SAFETY.md) | When mirror traffic is and isn't safe — read/write classification, shadow stacks, dry-run handlers, idempotency, decision tree |
 | [`docs/MIGRATION_SUCCESS.md`](docs/MIGRATION_SUCCESS.md) | The SLO gates that decide whether a step advances or rolls back |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Control plane vs data plane, why Gateway API over frozen Ingress |
 | [`docs/READING_THE_DASHBOARD.md`](docs/READING_THE_DASHBOARD.md) | Panel-by-panel guide to the Grafana dashboard — what each pair means, what healthy/unhealthy looks like, what each migration phase looks like on the graphs |

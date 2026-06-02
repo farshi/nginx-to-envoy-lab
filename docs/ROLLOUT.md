@@ -48,14 +48,18 @@ migration into a 2-month one.
 - [ ] Confirm Prometheus scrapes Envoy proxy `/stats/prometheus` and the side-by-side dashboard is populated.
 - [ ] **Exit gate:** Envoy returns the same status / body for a fixed test suite as nginx.
 
-## Phase 2 — Shadow / mirror (24 h, zero blast radius)
+## Phase 2 — Shadow / mirror (24 h, bounded blast radius)
 
-- [ ] Mirror 100 % of prod traffic to Envoy using either:
-  - the load balancer's traffic-mirroring feature (ALB/NLB target group mirror, GCP LB mirror), or
-  - an in-cluster sidecar / ext_proc that duplicates requests.
+> ⚠ Mirroring requests that have side effects (DB writes, payments, downstream API calls) will execute those side effects **twice**. Read `docs/SHADOW_SAFETY.md` and pick a strategy per endpoint class before starting this phase.
+
+- [ ] Classify endpoints by side-effect profile: **reads** (mirror 100 %), **idempotent writes with shadow-header support** (mirror with dry-run), **non-idempotent writes / payments** (no mirror — defer to Phase 3 ramp only).
+- [ ] Mirror the read traffic using either:
+  - the load balancer's traffic-mirroring feature (ALB/NLB target group mirror, Azure Front Door mirror, GCP LB mirror), or
+  - an in-cluster `requestMirrorPolicies` filter on the HTTPRoute.
 - [ ] Compare response distributions: status code, latency percentiles, body checksums (where safe).
 - [ ] Watch new dashboards: Envoy upstream health, outlier ejections, xDS sync state, memory.
-- [ ] **Exit gate:** every SLO in `MIGRATION_SUCCESS.md` green for 24 h; no divergent error or latency pattern.
+- [ ] Confirm **idempotency keys** are in place on every mutating endpoint that will ramp in Phase 3.
+- [ ] **Exit gate:** every SLO in `MIGRATION_SUCCESS.md` green for 24 h on the mirrored paths; no divergent error or latency pattern; no duplicate-write incidents reported.
 
 ## Phase 3 — Weighted ramp (T 0)
 
