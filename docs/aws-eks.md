@@ -15,7 +15,7 @@ EKS ships an **almost bare** cluster. There is no opinionated ingress, no servic
 
 That is it. No ingress controller, no Gateway API CRDs, no Prometheus, no service mesh.
 
-> **Interview line:** "Unlike k3d or GKE, EKS ships nothing for ingress — just VPC CNI, kube-proxy, CoreDNS. You install the AWS Load Balancer Controller for ALB/NLB, or Envoy Gateway / Istio if you need richer L7."
+> **In short:** Unlike k3d or GKE, EKS ships nothing for ingress — just VPC CNI, kube-proxy, CoreDNS. You install the AWS Load Balancer Controller for ALB/NLB, or Envoy Gateway / Istio if you need richer L7.
 
 ## The ingress layer you install
 

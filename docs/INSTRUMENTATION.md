@@ -46,7 +46,7 @@ Type cheat-sheet:
 | **Histogram**| observations into buckets — latency, payload size | `histogram_quantile(0.99, sum(rate(metric_bucket[5m])) by (le))` |
 | **Summary**  | client-computed quantiles, harder to aggregate | rarely needed; prefer Histogram |
 
-Label rules (interview signal):
+Label rules:
 
 - Labels must be **bounded**. Never label by `user_id`, request URL with query params, request id, etc — cardinality explodes and Prometheus eats RAM.
 - Good labels: `method`, `path` (template, not raw URL), `status_code`, `tenant`, `service`.
@@ -167,7 +167,7 @@ curl -s 'http://localhost:9091/api/v1/query?query=sum(rate(http_requests_total[1
   | jq '.data.result'
 ```
 
-## Gotchas that come up in interviews
+## Production gotchas
 
 ### Multi-process workers (gunicorn / uwsgi)
 

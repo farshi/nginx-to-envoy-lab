@@ -95,8 +95,14 @@ traffic-stop: ## Stop background load generators
 tunnel: ## Port-forward envoy-edge to host :8082 (k3d serverlb only forwards to one LB)
 	$(SHOW) "kubectl port-forward envoy-edge :8082"
 	@pkill -f "port-forward.*envoy-edge" 2>/dev/null || true
+	@echo "waiting for envoy proxy pod to be Ready..."
+	@kubectl wait -n envoy-gateway-system pod \
+		-l gateway.envoyproxy.io/owning-gateway-name=eg \
+		--for=condition=Ready --timeout=180s >/dev/null
+	@kubectl -n envoy-gateway-system wait --for=jsonpath='{.subsets[0].addresses[0].ip}' \
+		endpoints/envoy-edge --timeout=60s >/dev/null 2>&1 || true
 	@kubectl -n envoy-gateway-system port-forward svc/envoy-edge 8082:80 > /tmp/envoy-tunnel.log 2>&1 & echo $$! > /tmp/envoy-tunnel.pid
-	@sleep 2
+	@sleep 3
 	@curl -s -o /dev/null -w "envoy-demo.localhost:8082 -> HTTP %{http_code}\n" -H "Host: envoy-demo.localhost" http://localhost:8082/ || echo "tunnel not ready yet, retry: make tunnel"
 	@echo "tunnel pid: $$(cat /tmp/envoy-tunnel.pid)  log: /tmp/envoy-tunnel.log"
 

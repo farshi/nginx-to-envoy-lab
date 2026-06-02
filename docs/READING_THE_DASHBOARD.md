@@ -205,6 +205,6 @@ Always read the rows in order: shape → quality → cause. If the quality row i
 
 ---
 
-## One-line summary for the interview
+## One-line summary
 
 > "The dashboard is structured as RED side-by-side: blue nginx baseline left, orange Envoy right, one row per signal — rate, errors, latency. Below it, four stat panels for Envoy-specific leading indicators: xDS sync, healthy endpoints, outlier ejections, circuit-breaker overflow. Each row maps to an SLO gate; the cutover advances or rolls back on what the panels say, not on what anyone hopes."
