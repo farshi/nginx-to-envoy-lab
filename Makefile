@@ -9,7 +9,7 @@ NAMESPACE ?= demo
 .PHONY: help up cluster image install-nginx install-envoy install-monitoring \
         apply traffic grafana prom demo down clean \
         rollback-install rollback-uninstall rollback-test canary-status \
-        annotation-audit translate-annotations
+        annotation-audit translate-annotations install-ingress2gateway
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -469,14 +469,30 @@ canary-status: ## ROLLBACK — show weight split for all canary HTTPRoutes
 # ANNOTATION TRANSLATION — Phase-0 audit + policy stub generation
 # ───────────────────────────────────────────────────────────────────
 
+install-ingress2gateway: ## TRANSLATE — install ingress2gateway (official SIG tool: Ingress -> HTTPRoute)
+	$(SHOW) "go install sigs.k8s.io/ingress2gateway@latest"
+	@command -v go >/dev/null || { echo "go not found — install from https://go.dev/dl/"; exit 1; }
+	@GOBIN=/usr/local/bin go install sigs.k8s.io/ingress2gateway@latest
+	@ingress2gateway version
+	@echo "ingress2gateway installed at $$(which ingress2gateway)"
+
 annotation-audit: ## TRANSLATE — dump all nginx annotations per Ingress (Phase-0 inventory)
 	$(SHOW) "kubectl get ing -A -o json | jq annotation inventory"
 	@kubectl get ing -A -o json | \
 	  jq -r '.items[] | .metadata.namespace + "/" + .metadata.name + " | " + (.metadata.annotations // {} | keys | join(", "))' | \
 	  sort | column -t -s'|'
 
-translate-annotations: ## TRANSLATE — audit annotations + emit BackendTrafficPolicy/SecurityPolicy stubs → manifests/generated/
-	$(SHOW) "bash scripts/translate-annotations.sh"
+translate-annotations: ## TRANSLATE — run ingress2gateway + emit policy stubs -> manifests/generated/
+	$(SHOW) "ingress2gateway print --providers=ingress-nginx --all-namespaces"
+	@command -v ingress2gateway >/dev/null || { \
+	  echo "ingress2gateway not found — run: make install-ingress2gateway"; exit 1; }
+	@mkdir -p manifests/generated
+	@ingress2gateway print \
+	  --providers=ingress-nginx \
+	  --all-namespaces \
+	  > manifests/generated/httproutes.yaml
+	@echo "HTTPRoutes -> manifests/generated/httproutes.yaml"
+	$(SHOW) "bash scripts/translate-annotations.sh (policy stubs)"
 	@bash scripts/translate-annotations.sh
 	@echo ""
 	@echo "Review manifests/generated/ then: kubectl apply -f manifests/generated/"
