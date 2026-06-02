@@ -1,167 +1,146 @@
 ---
 title: "nginx -> Envoy Gateway Migration Lab"
-subtitle: "Automated rollback + annotation translation at 100-endpoint scale"
-author: "Reza Farshi — reza.farshi@gmail.com"
+author: "Reza Farshi"
 date: "June 2026"
-geometry: "top=1.8cm, bottom=1.8cm, left=2cm, right=2cm"
-fontsize: 10pt
+geometry: "top=2cm, bottom=2cm, left=2.2cm, right=2.2cm"
+fontsize: 10.5pt
 mainfont: "Helvetica Neue"
 monofont: "Menlo"
-monofontoptions: "Scale=0.80"
+monofontoptions: "Scale=0.78"
 colorlinks: true
 urlcolor: "NavyBlue"
 header-includes:
   - \usepackage{booktabs}
   - \usepackage{xcolor}
   - \usepackage{fancyhdr}
-  - \definecolor{lightgray}{RGB}{245, 245, 245}
+  - \usepackage{tabularx}
+  - \usepackage{array}
+  - \definecolor{accent}{RGB}{30, 100, 200}
+  - \definecolor{muted}{RGB}{100, 100, 100}
+  - \definecolor{rulegray}{RGB}{180, 180, 180}
   - \pagestyle{fancy}
   - \fancyhf{}
-  - \rhead{\textcolor{gray}{\small reza.farshi@gmail.com}}
-  - \lhead{\textcolor{gray}{\small github.com/farshi/nginx-to-envoy-lab}}
-  - \cfoot{\textcolor{gray}{\small \thepage}}
-  - \renewcommand{\headrulewidth}{0.4pt}
+  - \lhead{\textcolor{muted}{\small \textbf{nginx -> Envoy Gateway Migration Lab} \quad|\quad Reza Farshi}}
+  - \rhead{\textcolor{muted}{\small github.com/farshi/nginx-to-envoy-lab}}
+  - \cfoot{\textcolor{muted}{\small \thepage}}
+  - \renewcommand{\headrulewidth}{0.3pt}
+  - \renewcommand{\headrule}{\color{rulegray}\hrule width\headwidth height\headrulewidth}
+  - \setlength{\parskip}{4pt}
 ---
 
-## Problem
+\begin{center}
+\large\textbf{Problem:} migrating 100 nginx Ingresses to Envoy Gateway — each with different annotations,\\
+with no human watching dashboards, and with sub-10-second rollback on breach.
+\end{center}
 
-Migrating 100 nginx Ingresses to Envoy Gateway introduces two hard problems:
+\vspace{0.3cm}
+\noindent\textcolor{rulegray}{\rule{\linewidth}{0.4pt}}
+\vspace{0.1cm}
 
-1. **You cannot watch a dashboard per endpoint** — rollback must be automated, metric-driven, and fleet-wide
-2. **Each Ingress has different annotations** — timeout, retry, rate-limit, auth, CORS — all need translation to Gateway API CRDs without manual per-route work
+## What Was Built
 
-This lab implements both.
+A production-grade Kubernetes lab that solves two concrete problems at the 100-endpoint scale:
+
+- **Automated rollback** — a `CronJob` queries Prometheus every 60 s; on breach it rolls back every canary `HTTPRoute` fleet-wide with no human in the loop
+- **Annotation translation** — `ingress2gateway` (official Kubernetes SIG tool) + per-Ingress policy stub generation converts the full annotation set to Gateway API CRDs automatically
+
+**Stack:** k3d · Envoy Gateway v1.2 · ingress-nginx · kube-prometheus-stack · ArgoCD · Gateway API
 
 ---
 
 ## Architecture
 
 ```
-  Traffic           Kubernetes (k3d)
-  ─────────
-  :8081  ---------> ingress-nginx  ──────────────┐
-                                                  +--> demo-api (Flask)
-  :8082  ---------> Envoy Gateway ───────────────┘
-                    (GatewayClass / Gateway / HTTPRoute)
-
-                    Prometheus <-- ServiceMonitors (both stacks)
-                    ArgoCD     <-- manifests/ (GitOps)
+  :8081 ──> ingress-nginx ──┐
+                             +--> demo-api       Prometheus <-- ServiceMonitors
+  :8082 ──> Envoy Gateway ──┘                   ArgoCD     <-- manifests/
+             GatewayClass / Gateway / HTTPRoute
 ```
 
-Both stacks serve the **same backend simultaneously**. Migration = shifting `backendRefs` weights in the HTTPRoute. No DNS changes required during canary.
-
-**Stack:** k3d · Envoy Gateway v1.2 · ingress-nginx · kube-prometheus-stack · ArgoCD · Gateway API
+Both stacks serve the same backend simultaneously. Canary = `backendRefs` weight split inside one HTTPRoute. No DNS changes during ramp.
 
 ---
 
-## Automated Rollback (fleet-wide, no human in the loop)
+## Automated Rollback
 
-**The key constraint:** at 100 endpoints a human cannot watch per-route dashboards. Rollback must fire automatically from metrics.
+\textcolor{muted}{\small\textit{Core insight: at 100 endpoints you cannot watch per-route dashboards. Rollback must be metric-driven and fleet-scoped.}}
 
-### How it works
-
-Every canary HTTPRoute is labeled `migration=canary`. A `CronJob` (`canary-watchdog`) queries Prometheus every 60 s:
+**`canary-watchdog` CronJob** — fires every 60 s, two breach conditions:
 
 ```
 envoy 5xx / total  >  5%        -> rollback
 p99 downstream latency > 2000ms -> rollback
 ```
 
-On breach, one loop hits all 100 routes atomically — ~5 to 10 seconds end-to-end:
+All HTTPRoutes labeled `migration=canary` are targeted in a single loop — 100 routes, ~5 to 10 seconds:
 
 ```bash
-kubectl get httproute -A -l migration=canary \
-  -o custom-columns="NS:.metadata.namespace,NAME:.metadata.name" --no-headers \
-| while read -r ns name; do
-    kubectl delete httproute "$name" -n "$ns" --ignore-not-found
-  done
+kubectl get httproute -A -l migration=canary ... | while read ns name; do
+  kubectl delete httproute "$name" -n "$ns"
+done
 ```
 
-### Three rollback levels (defence-in-depth)
+**Three rollback levels:**
 
-| Level | Action | Speed | When |
-|---|---|---|---|
-| L1 | Patch weights: nginx=100 envoy=0 | < 2s | Soft breach, keep HTTPRoute |
-| L2 | Delete HTTPRoute | < 5s | Hard breach, xDS pushes removal |
-| L3 | Delete Gateway entirely | < 5s | Total failure, nginx handles 100% |
+| Level | Action | Latency |
+|---|---|---|
+| L1 | Patch weights: nginx=100, envoy=0 | < 2 s |
+| L2 | Delete HTTPRoute (xDS pushes removal) | < 5 s |
+| L3 | Delete Gateway (nginx handles 100%) | < 5 s |
 
-### Files
-
-| File | Purpose |
-|---|---|
-| `manifests/rollback/cronjob.yaml` | CronJob: Prometheus query -> threshold check -> rollback |
-| `manifests/rollback/rbac.yaml` | ServiceAccount + ClusterRole (patch/delete HTTPRoutes cluster-wide) |
-| `manifests/rollback/prometheus-rule.yaml` | PrometheusRule alerts (error rate + latency breach) |
-| `scripts/auto-rollback.sh` | Rollback logic: `--delete` or `--reweight`, supports `DRY_RUN=true` |
+**Operational commands:**
 
 ```bash
 make rollback-install    # deploy CronJob + RBAC + PrometheusRule
-make rollback-test       # manual trigger (DRY_RUN=true to preview)
-make canary-status       # show weight split across all canary HTTPRoutes
+make rollback-test       # manual trigger  (DRY_RUN=true to preview)
+make canary-status       # weight split across all canary HTTPRoutes
+make chaos               # inject 10% 500s -> watch watchdog fire automatically
 ```
 
 ---
 
-## Annotation Translation (100-endpoint problem)
+## Annotation Translation
 
-Each nginx Ingress carries different annotations. Manual translation per route does not scale.
+\textcolor{muted}{\small\textit{Each of 100 Ingresses carries different annotations. Manual per-route translation does not scale.}}
 
-`scripts/translate-annotations.sh` automates the full Phase-0 audit:
+**`make translate-annotations`** runs two steps:
 
-1. Inventories every annotation across all Ingresses (`kubectl get ing -A -o json | jq`)
-2. Flags hard cases with no direct mapping (`server-snippet`, `modsecurity-snippet`)
-3. Calls `ingress2gateway` (SIG tool) to generate HTTPRoute manifests
-4. Emits per-Ingress `BackendTrafficPolicy` + `SecurityPolicy` stubs -> `manifests/generated/`
-
-### Annotation -> Envoy Gateway mapping
+1. **`ingress2gateway`** (official SIG tool — `sigs.k8s.io/ingress2gateway`) reads live Ingresses and emits `HTTPRoute` manifests for common annotations
+2. **`scripts/translate-annotations.sh`** covers the remainder — emits `BackendTrafficPolicy` + `SecurityPolicy` stubs per Ingress, flags hard cases
 
 | nginx annotation | Envoy Gateway CRD | Field |
 |---|---|---|
 | `proxy-read-timeout` | `BackendTrafficPolicy` | `timeout.http.requestTimeout` |
-| `proxy-connect-timeout` | `BackendTrafficPolicy` | `timeout.tcp.connectTimeout` |
 | `proxy-next-upstream-tries` | `BackendTrafficPolicy` | `retry.numRetries` |
 | `limit-rps` | `BackendTrafficPolicy` | `rateLimit.local` |
-| `rewrite-target` | HTTPRoute filter | `URLRewrite.path` |
-| `ssl-redirect` | HTTPRoute filter | `RequestRedirect.scheme: https` |
 | `whitelist-source-range` | `SecurityPolicy` | `ipAllowList.cidrRanges` |
 | `auth-url` | `SecurityPolicy` | `extAuth.http` |
-| `affinity: cookie` | `BackendTrafficPolicy` | `loadBalancer.consistentHash` |
-| `server-snippet` / `modsecurity` | `EnvoyExtensionPolicy` | Wasm filter — **manual work** |
+| `rewrite-target` | HTTPRoute filter | `URLRewrite.path` |
+| `server-snippet` / `modsecurity` | `EnvoyExtensionPolicy` | Wasm — **manual work required** |
 
-Each policy attaches per-route via `targetRef` so different annotations stay independent across 100 routes.
+Each policy attaches via `targetRef` scoped to its own HTTPRoute — 100 routes stay independent.
 
 ```bash
-make annotation-audit        # fleet-wide annotation inventory
-make translate-annotations   # generate all stubs -> manifests/generated/
+make install-ingress2gateway   # install official SIG tool
+make annotation-audit          # fleet-wide inventory of every annotation
+make translate-annotations     # generate HTTPRoutes + policy stubs -> manifests/generated/
 ```
 
 ---
 
-## Observability
-
-Prometheus `ServiceMonitor` on both stacks. Grafana dashboard for **demo visibility** — not the operational monitoring mechanism. The CronJob is the operational mechanism.
-
-**Live failure injection for demo/testing:**
+## Failure Injection + Demo
 
 ```bash
-make chaos           # 10% random 500s on demo-api
-make bad-traffic     # hammer /fail -> error rate spikes -> watchdog fires
-make slow-traffic    # hammer /slow?seconds=2 -> p99 breach -> watchdog fires
+make up            # bootstrap full cluster (~4 min on MacBook)
+make chaos         # 10% random 500s -> watchdog auto-rollback fires
+make bad-traffic   # hammer /fail -> visible error spike
+make slow-traffic  # hammer /slow?seconds=2 -> p99 breach
+make demo-step1    # through demo-step6: full live walkthrough
 ```
 
----
-
-## Demo Flow
-
-```
-make up          # bootstrap full cluster (~4 min on MacBook)
-make demo-reset  # nginx only, no Envoy
-make demo-step2  # deploy Envoy parallel (zero nginx downtime)
-make demo-step5  # show weighted canary split in HTTPRoute
-make chaos       # inject failures -> watch CronJob auto-rollback fire
-make demo-step6  # manual rollback demonstration
-```
+\vspace{0.3cm}
+\noindent\textcolor{rulegray}{\rule{\linewidth}{0.4pt}}
 
 \begin{center}
-\textbf{github.com/farshi/nginx-to-envoy-lab}
+\textbf{github.com/farshi/nginx-to-envoy-lab} \quad\textcolor{muted}{|}\quad \texttt{make up} to run locally \quad\textcolor{muted}{|}\quad \texttt{reza.farshi@gmail.com}
 \end{center}
