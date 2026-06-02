@@ -131,12 +131,14 @@ slow-traffic-stop: ## Stop the slow-endpoint load
 	@echo "slow traffic stopped"
 
 chaos: ## Random-failure mode: 10% of ALL requests to demo-api return 500 (set ERROR_RATE_PERCENT=10)
+	$(SHOW) "kubectl -n demo set env deploy/demo-api ERROR_RATE_PERCENT=10"
 	@kubectl -n $(NAMESPACE) set env deploy/demo-api ERROR_RATE_PERCENT=10
 	@kubectl -n $(NAMESPACE) rollout status deploy/demo-api --timeout=60s
 	@echo "demo-api is now failing 10 percent of requests randomly — both ingresses will reflect it"
 	@echo "stop: make chaos-stop"
 
 chaos-stop: ## Disable random-failure mode (back to 0 percent)
+	$(SHOW) "kubectl -n demo set env deploy/demo-api ERROR_RATE_PERCENT=0"
 	@kubectl -n $(NAMESPACE) set env deploy/demo-api ERROR_RATE_PERCENT=0
 	@kubectl -n $(NAMESPACE) rollout status deploy/demo-api --timeout=60s
 	@echo "error rate back to zero"
@@ -359,32 +361,45 @@ demo-step6: ## DEMO step 6 — rollback to nginx-only (delete Envoy resources)
 # ───────────────────────────────────────────────────────────────────
 
 audit: ## AUDIT — dump every Ingress annotation + class + host (Phase-0 inventory)
+	$(SHOW) "kubectl get ing -A"
 	@kubectl get ing -A
 	@echo
-	@kubectl get ing -A -o yaml | grep -E "nginx.(ingress|org)|ingressClassName|host:" || true
+	$(SHOW) "kubectl get ing -A -o yaml | grep ingress"
+	@kubectl get ing -A -o yaml | grep ingress || true
 
 envoy-up: ## DEPLOY Envoy parallel to nginx (idempotent — applies all envoy manifests)
+	$(SHOW) "kubectl apply -f manifests/envoy/"
 	@kubectl apply -f manifests/envoy/
 	@echo
-	@echo "waiting for envoy proxy pod..."
+	$(SHOW) "kubectl wait pod -l ...envoy... --for=condition=Ready"
 	@kubectl -n envoy-gateway-system wait pod -l gateway.envoyproxy.io/owning-gateway-name=eg \
 		--for=condition=Ready --timeout=180s
 	@$(MAKE) -s tunnel
 
 envoy-down: ## ROLLBACK — delete Gateway + HTTPRoute (Envoy stops, nginx unaffected)
+	$(SHOW) "kubectl delete httproute demo-via-envoy -n demo"
 	-@kubectl delete -n $(NAMESPACE) httproute demo-via-envoy
+	$(SHOW) "kubectl delete gateway eg -n demo"
 	-@kubectl delete -n $(NAMESPACE) gateway eg
 	@echo
+	$(SHOW) "kubectl get ing,gateway,httproute -n demo"
 	@kubectl get ing,gateway,httproute -n $(NAMESPACE)
 
 envoy-pods: ## SHOW envoy controller + proxy pod status
+	$(SHOW) "kubectl get pods -n envoy-gateway-system"
 	@kubectl get pods -n envoy-gateway-system
 
 smoke: ## CURL both ingresses (nginx + envoy) and show response codes
-	@printf "nginx 8081 -> "; curl -s -o /dev/null -w "HTTP %{http_code}  time=%{time_total}s\n" \
+	$(SHOW) "curl -H 'Host: nginx-demo.localhost' http://localhost:8081/"
+	@printf "  nginx 8081 -> "; curl -s -o /dev/null -w "HTTP %{http_code}  time=%{time_total}s\n" \
 		-H "Host: nginx-demo.localhost" http://localhost:8081/
-	@printf "envoy 8082 -> "; curl -s -o /dev/null -w "HTTP %{http_code}  time=%{time_total}s\n" \
+	$(SHOW) "curl -H 'Host: envoy-demo.localhost' http://localhost:8082/"
+	@printf "  envoy 8082 -> "; curl -s -o /dev/null -w "HTTP %{http_code}  time=%{time_total}s\n" \
 		-H "Host: envoy-demo.localhost" http://localhost:8082/
+
+chaos-show: ## SHOW the chaos kubectl command (no apply)
+	$(SHOW) "kubectl -n demo set env deploy/demo-api ERROR_RATE_PERCENT=10"
+	@echo "  (apply with: make chaos)"
 
 demo-help: ## DEMO — show the script in order
 	@echo "Demo run order (one command per step):"
