@@ -28,16 +28,16 @@ Same backend. Two ingress paths. One dashboard. One policy doc.
 
 ```mermaid
 flowchart LR
-    DNS{"Weighted DNS<br/>Route 53 / Traffic Manager / Cloud DNS<br/>TTL 60s"}
-    DNS -->|"95 percent"| LB1["nginx LB"]
-    DNS -->|"5 percent"|  LB2["envoy LB"]
+    DNS["Weighted DNS<br/>Route 53, Traffic Manager, Cloud DNS<br/>TTL 60s"]
+    DNS -- "95pct" --> LB1["nginx LB"]
+    DNS -- "5pct"  --> LB2["envoy LB"]
     LB1 --> NGX2["ingress-nginx"]
     LB2 --> EG2["Envoy Gateway"]
     NGX2 --> APP["Pods"]
     EG2  --> APP
-    APP  --> SLO{"SLO gates breached?"}
-    SLO -->|"yes"| ROLL["L1 to L4 rollback<br/>weights revert"]
-    SLO -->|"no"|  PROMOTE["next weight: 25, 50, 100 percent"]
+    APP  --> SLO["SLO gates breached?"]
+    SLO -- "yes" --> ROLL["L1 to L4 rollback<br/>weights revert"]
+    SLO -- "no"  --> PROMOTE["next weight: 25, 50, 100 percent"]
 ```
 
 ## Control plane vs data plane
