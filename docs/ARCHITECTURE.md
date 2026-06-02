@@ -6,20 +6,20 @@ A safe ingress migration is not a config swap. Both controllers serve real traff
 
 ```mermaid
 flowchart LR
-    LG[Load generator] --> NGX[ingress-nginx]
-    LG --> EG[Envoy Gateway proxy]
-    NGX --> SVC[Service/demo-api]
+    LG["Load generator"] --> NGX["ingress-nginx"]
+    LG --> EG["Envoy Gateway proxy"]
+    NGX --> SVC["Service: demo-api"]
     EG  --> SVC
-    SVC --> POD[Pods: demo-api]
+    SVC --> POD["Pods: demo-api"]
 
-    NGX -. /metrics .-> PROM[(Prometheus)]
-    EG  -. /stats/prometheus .-> PROM
-    POD -. /metrics .-> PROM
-    PROM --> GRAF[Grafana: RED side-by-side · SLO gates]
+    NGX -. "/metrics" .-> PROM[("Prometheus")]
+    EG  -. "/stats/prometheus" .-> PROM
+    POD -. "/metrics" .-> PROM
+    PROM --> GRAF["Grafana: RED side-by-side, SLO gates"]
 
-    USER([Operator]) --> PORTAL[Portal HTML in cluster]
-    PORTAL -. iframe .-> GRAF
-    PORTAL -. iframe .-> PROM
+    USER(["Operator"]) --> PORTAL["Portal HTML in cluster"]
+    PORTAL -. "iframe" .-> GRAF
+    PORTAL -. "iframe" .-> PROM
 ```
 
 Same backend. Two ingress paths. One dashboard. One policy doc.
@@ -28,16 +28,16 @@ Same backend. Two ingress paths. One dashboard. One policy doc.
 
 ```mermaid
 flowchart LR
-    DNS{Route 53 / Cloud DNS<br/>weighted records<br/>TTL 60s}
-    DNS -->|95%| LB1[nginx LB]
-    DNS -->|5%|  LB2[envoy LB]
-    LB1 --> NGX2[ingress-nginx]
-    LB2 --> EG2[Envoy Gateway]
-    NGX2 --> APP[Pods]
+    DNS{"Weighted DNS<br/>Route 53 / Traffic Manager / Cloud DNS<br/>TTL 60s"}
+    DNS -->|"95 percent"| LB1["nginx LB"]
+    DNS -->|"5 percent"|  LB2["envoy LB"]
+    LB1 --> NGX2["ingress-nginx"]
+    LB2 --> EG2["Envoy Gateway"]
+    NGX2 --> APP["Pods"]
     EG2  --> APP
-    SLO[SLO gates breached?]
-    SLO -->|YES| ROLL[L1-L4 rollback<br/>weights revert]
-    SLO -->|NO|  PROMOTE[next weight: 25% → 50% → 100%]
+    APP  --> SLO{"SLO gates breached?"}
+    SLO -->|"yes"| ROLL["L1 to L4 rollback<br/>weights revert"]
+    SLO -->|"no"|  PROMOTE["next weight: 25, 50, 100 percent"]
 ```
 
 ## Control plane vs data plane
