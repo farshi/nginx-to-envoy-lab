@@ -1,0 +1,19 @@
+# EnvoyProxy config — switch the auto-provisioned envoy proxy Service from
+# LoadBalancer (default) to ClusterIP. We don't need a LoadBalancer locally
+# because:
+#   - k3d's klipper-lb can only fulfil one LoadBalancer per host backend port
+#     and ingress-nginx already claimed it, so the LB Service stays pending
+#     and leaves dangling svclb-* pods in kube-system
+#   - we reach the envoy proxy via `make tunnel` (kubectl port-forward
+#     svc/envoy-edge 8082:80)
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: lab-config
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: ClusterIP
