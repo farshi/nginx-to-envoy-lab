@@ -354,6 +354,38 @@ demo-step6: ## DEMO step 6 — rollback to nginx-only (delete Envoy resources)
 	@echo
 	@echo "Demo complete. Run 'make demo-step1' to restart, or 'make demo-step2' to re-deploy Envoy."
 
+# ───────────────────────────────────────────────────────────────────
+# ATOMIC kubectl wrappers — type 'make X' OR the raw command, your call
+# ───────────────────────────────────────────────────────────────────
+
+audit: ## AUDIT — dump every Ingress annotation + class + host (Phase-0 inventory)
+	@kubectl get ing -A
+	@echo
+	@kubectl get ing -A -o yaml | grep -E "nginx.(ingress|org)|ingressClassName|host:" || true
+
+envoy-up: ## DEPLOY Envoy parallel to nginx (idempotent — applies all envoy manifests)
+	@kubectl apply -f manifests/envoy/
+	@echo
+	@echo "waiting for envoy proxy pod..."
+	@kubectl -n envoy-gateway-system wait pod -l gateway.envoyproxy.io/owning-gateway-name=eg \
+		--for=condition=Ready --timeout=180s
+	@$(MAKE) -s tunnel
+
+envoy-down: ## ROLLBACK — delete Gateway + HTTPRoute (Envoy stops, nginx unaffected)
+	-@kubectl delete -n $(NAMESPACE) httproute demo-via-envoy
+	-@kubectl delete -n $(NAMESPACE) gateway eg
+	@echo
+	@kubectl get ing,gateway,httproute -n $(NAMESPACE)
+
+envoy-pods: ## SHOW envoy controller + proxy pod status
+	@kubectl get pods -n envoy-gateway-system
+
+smoke: ## CURL both ingresses (nginx + envoy) and show response codes
+	@printf "nginx 8081 -> "; curl -s -o /dev/null -w "HTTP %{http_code}  time=%{time_total}s\n" \
+		-H "Host: nginx-demo.localhost" http://localhost:8081/
+	@printf "envoy 8082 -> "; curl -s -o /dev/null -w "HTTP %{http_code}  time=%{time_total}s\n" \
+		-H "Host: envoy-demo.localhost" http://localhost:8082/
+
 demo-help: ## DEMO — show the script in order
 	@echo "Demo run order (one command per step):"
 	@echo "  make demo-reset    # back to 'today' (only nginx)"

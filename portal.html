@@ -151,15 +151,27 @@ const localTools = [
 ];
 
 const commandCheatsheet = [
-  { label: "bootstrap whole lab",  cmd: "make up" },
-  { label: "curl-test both paths", cmd: "make demo" },
-  { label: "background load",      cmd: "make traffic" },
-  { label: "open Grafana",         cmd: "make grafana" },
-  { label: "tear down",            cmd: "make down" },
-  { label: "envoy admin :19000",   cmd: "kubectl -n envoy-gateway-system port-forward $(kubectl -n envoy-gateway-system get pod -l gateway.envoyproxy.io/owning-gateway-name=eg -o name | head -1) 19000:19000" },
-  { label: "envoy /clusters",      cmd: "curl -s localhost:19000/clusters | head" },
-  { label: "envoy /config_dump",   cmd: "curl -s localhost:19000/config_dump | jq '.configs[].\"@type\"'" },
-  { label: "prom targets",         cmd: "curl -s http://localhost:9091/api/v1/targets?state=active | jq '.data.activeTargets[].labels.job' | sort -u" },
+  // ── The 5 demo commands (raw kubectl OR make wrapper)
+  { label: "Phase-0 audit (annotations + hosts)", cmd: "make audit\n# or raw:\nkubectl get ing -A -o yaml | grep -E \"nginx.ingress|ingressClassName|host:\"" },
+  { label: "Deploy Envoy parallel",  cmd: "make envoy-up\n# or raw:\nkubectl apply -f manifests/envoy/\nkubectl wait -n envoy-gateway-system pod -l gateway.envoyproxy.io/owning-gateway-name=eg --for=condition=Ready --timeout=180s" },
+  { label: "Show Envoy pods",        cmd: "make envoy-pods\n# or raw:\nkubectl get pods -n envoy-gateway-system" },
+  { label: "Smoke-test both paths",  cmd: "make smoke\n# or raw:\ncurl -H \"Host: nginx-demo.localhost\" http://localhost:8081/\ncurl -H \"Host: envoy-demo.localhost\" http://localhost:8082/" },
+  { label: "Rollback (delete Envoy)", cmd: "make envoy-down\n# or raw:\nkubectl delete httproute demo-via-envoy -n demo\nkubectl delete gateway eg -n demo" },
+  // ── Failure injection
+  { label: "Inject 10% random 5xx",  cmd: "make chaos\n# or raw:\nkubectl -n demo set env deploy/demo-api ERROR_RATE_PERCENT=10" },
+  { label: "Reset chaos",            cmd: "make chaos-stop" },
+  { label: "Hammer /fail (5xx)",     cmd: "make bad-traffic" },
+  { label: "Hammer /slow?seconds=2", cmd: "make slow-traffic" },
+  // ── Bootstrap / lifecycle
+  { label: "Bootstrap whole lab",    cmd: "make up" },
+  { label: "Status of all traffic",  cmd: "make traffic-status" },
+  { label: "Tear down cluster",      cmd: "make down" },
+  // ── Envoy admin (deep diagnostics)
+  { label: "Open Envoy admin :19000", cmd: "make envoy-admin" },
+  { label: "Envoy /clusters",        cmd: "curl -s localhost:19000/clusters | head" },
+  { label: "Envoy /config_dump",     cmd: "curl -s localhost:19000/config_dump | jq '.configs[].\"@type\"'" },
+  // ── Prometheus inspection
+  { label: "Prom targets UP",        cmd: "curl -s http://localhost:9091/api/v1/targets?state=active | jq '.data.activeTargets[].labels.job' | sort -u" },
 ];
 
 const sloGates = [
