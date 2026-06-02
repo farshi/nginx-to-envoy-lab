@@ -86,11 +86,34 @@ traffic: ## Run external traffic against both hostnames (requires `hey`)
 	@( hey -z 30m -c 10 -q 20 http://envoy-demo.localhost:8082/ >/dev/null & echo $$! > /tmp/hey-envoy.pid )
 	@echo "load started. stop with: make traffic-stop"
 
-traffic-stop: ## Stop background load generators
+traffic-stop: ## Stop HOST hey load generators (does NOT stop the in-cluster loadgen Deployment)
 	@[ -f /tmp/hey-nginx.pid ] && kill $$(cat /tmp/hey-nginx.pid) 2>/dev/null || true
 	@[ -f /tmp/hey-envoy.pid ] && kill $$(cat /tmp/hey-envoy.pid) 2>/dev/null || true
+	@pkill -f "^hey -z" 2>/dev/null || true
 	@rm -f /tmp/hey-*.pid
-	@echo "load stopped"
+	@echo "hey stopped (in-cluster loadgen still running — use 'make traffic-stop-all' to stop it too)"
+
+traffic-stop-all: traffic-stop ## Stop hey AND the in-cluster loadgen Deployment
+	@kubectl -n $(NAMESPACE) scale deploy/loadgen --replicas=0
+	@echo "loadgen scaled to 0 — both Grafana panels will go flat after the next rate() window"
+
+traffic-resume: ## Restart the in-cluster loadgen (back to 1 replica)
+	@kubectl -n $(NAMESPACE) scale deploy/loadgen --replicas=1
+	@kubectl -n $(NAMESPACE) rollout status deploy/loadgen --timeout=60s
+	@echo "loadgen resumed"
+
+traffic-status: ## Show what's currently sending traffic
+	@echo "=== HOST hey processes ==="
+	@pgrep -af "^hey -z" || echo "(none)"
+	@echo
+	@echo "=== in-cluster loadgen ==="
+	@kubectl get deploy/loadgen -n $(NAMESPACE) -o custom-columns=NAME:.metadata.name,DESIRED:.spec.replicas,READY:.status.readyReplicas,AGE:.metadata.creationTimestamp
+	@echo
+	@echo "=== current scrape rate (per ingress) ==="
+	@printf "  nginx req/s : "
+	@curl -s "http://localhost:9091/api/v1/query?query=sum(rate(nginx_ingress_controller_requests%5B1m%5D))" | python3 -c "import sys,json; r=json.load(sys.stdin)['data']['result']; print(round(float(r[0]['value'][1]),1) if r else 'no data')" 2>/dev/null
+	@printf "  envoy req/s : "
+	@curl -s "http://localhost:9091/api/v1/query?query=sum(rate(envoy_cluster_upstream_rq_total%5B1m%5D))" | python3 -c "import sys,json; r=json.load(sys.stdin)['data']['result']; print(round(float(r[0]['value'][1]),1) if r else 'no data')" 2>/dev/null
 
 tunnel: ## Port-forward envoy-edge to host :8082 (k3d serverlb only forwards to one LB)
 	$(SHOW) "kubectl port-forward envoy-edge :8082"
