@@ -102,6 +102,45 @@ traffic-resume: ## Restart the in-cluster loadgen (back to 1 replica)
 	@kubectl -n $(NAMESPACE) rollout status deploy/loadgen --timeout=60s
 	@echo "loadgen resumed"
 
+bad-traffic: ## Fire 5xx-only load at /fail through BOTH ingresses (visible spike on the errors panel)
+	@command -v hey >/dev/null || { echo "install hey: brew install hey"; exit 1; }
+	@( hey -z 5m -c 5 -q 10 http://nginx-demo.localhost:8081/fail >/dev/null & echo $$! > /tmp/hey-nginx-bad.pid )
+	@( hey -z 5m -c 5 -q 10 http://envoy-demo.localhost:8082/fail >/dev/null & echo $$! > /tmp/hey-envoy-bad.pid )
+	@echo "5xx storm running for 5 min on /fail through both ingresses (~50 req/s of 500s each)"
+	@echo "stop early: make bad-traffic-stop"
+
+bad-traffic-stop: ## Stop the /fail load
+	@[ -f /tmp/hey-nginx-bad.pid ] && kill $$(cat /tmp/hey-nginx-bad.pid) 2>/dev/null || true
+	@[ -f /tmp/hey-envoy-bad.pid ] && kill $$(cat /tmp/hey-envoy-bad.pid) 2>/dev/null || true
+	@pkill -f "hey -z .* /fail" 2>/dev/null || true
+	@rm -f /tmp/hey-*-bad.pid
+	@echo "bad traffic stopped"
+
+slow-traffic: ## Fire slow-endpoint load (?seconds=2) — spikes the p99 latency panel
+	@command -v hey >/dev/null || { echo "install hey: brew install hey"; exit 1; }
+	@( hey -z 5m -c 3 -q 5 "http://nginx-demo.localhost:8081/slow?seconds=2" >/dev/null & echo $$! > /tmp/hey-nginx-slow.pid )
+	@( hey -z 5m -c 3 -q 5 "http://envoy-demo.localhost:8082/slow?seconds=2" >/dev/null & echo $$! > /tmp/hey-envoy-slow.pid )
+	@echo "slow-request load running — p99 latency panels will climb toward 2s"
+	@echo "stop early: make slow-traffic-stop"
+
+slow-traffic-stop: ## Stop the slow-endpoint load
+	@[ -f /tmp/hey-nginx-slow.pid ] && kill $$(cat /tmp/hey-nginx-slow.pid) 2>/dev/null || true
+	@[ -f /tmp/hey-envoy-slow.pid ] && kill $$(cat /tmp/hey-envoy-slow.pid) 2>/dev/null || true
+	@pkill -f "hey -z .* /slow" 2>/dev/null || true
+	@rm -f /tmp/hey-*-slow.pid
+	@echo "slow traffic stopped"
+
+chaos: ## Random-failure mode: 10% of ALL requests to demo-api return 500 (set ERROR_RATE_PERCENT=10)
+	@kubectl -n $(NAMESPACE) set env deploy/demo-api ERROR_RATE_PERCENT=10
+	@kubectl -n $(NAMESPACE) rollout status deploy/demo-api --timeout=60s
+	@echo "demo-api is now failing 10 percent of requests randomly — both ingresses will reflect it"
+	@echo "stop: make chaos-stop"
+
+chaos-stop: ## Disable random-failure mode (back to 0 percent)
+	@kubectl -n $(NAMESPACE) set env deploy/demo-api ERROR_RATE_PERCENT=0
+	@kubectl -n $(NAMESPACE) rollout status deploy/demo-api --timeout=60s
+	@echo "error rate back to zero"
+
 traffic-status: ## Show what's currently sending traffic
 	@echo "=== HOST hey processes ==="
 	@pgrep -af "^hey -z" || echo "(none)"
