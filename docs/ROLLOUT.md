@@ -15,7 +15,7 @@ Step-by-step procedure for a real production cutover from ingress-nginx to Envoy
 ```
 ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────────┐  ┌───────────┐
 │ 0  Prep  │→ │ 1 Deploy │→ │ 2 Shadow │→ │ 3 Weighted  │→ │ 4 Cutover │
-│          │  │ parallel │  │  mirror  │  │   ramp      │  │           │
+│ + AUDIT  │  │ parallel │  │  mirror  │  │   ramp      │  │           │
 └──────────┘  └──────────┘  └──────────┘  └─────────────┘  └───────────┘
                                                                   │
                                                                   ▼
@@ -23,16 +23,22 @@ Step-by-step procedure for a real production cutover from ingress-nginx to Envoy
                                                           │ 5 Decommission│
                                                           │   nginx       │
                                                           └───────────────┘
+
+Phase 0's audit determines the whole timeline. Custom nginx snippets and
+in-cluster WAF rules without a clean Envoy mapping are what stretch a 2-week
+migration into a 2-month one.
 ```
 
 ## Phase 0 — Preparation (T −7 days)
 
-- [ ] Document current ingress-nginx config: annotations, custom snippets, TLS sources, rate-limit rules.
-- [ ] Build the **Envoy translation matrix**: each nginx annotation → Gateway API filter / Envoy feature.
-- [ ] Pre-stage Envoy Gateway in non-prod with the same routes; pass functional tests.
-- [ ] Lower **DNS TTL to 60 s** for all hostnames that will move. (TTL cache is the silent killer of fast rollbacks.)
-- [ ] Confirm baseline metrics from nginx for at least 7 days: request rate, 5xx %, p99 latency. These become the SLO gates.
-- [ ] Comms: announce the change window to app teams and incident channel.
+- [ ] **Annotation audit** — `kubectl get ing -A -o yaml | grep -E "nginx.ingress|cert-manager"` → enumerate every annotation in use across the fleet. This single artefact drives the timeline.
+- [ ] Build the **Envoy translation matrix**: each annotation → Gateway API filter / Envoy feature. Flag any that have no direct mapping (`configuration-snippet`, `server-snippet`, ModSecurity rules) — they cost the most engineering time.
+- [ ] **Confirm the edge layer** — TLS termination and WAF location. If Azure Front Door / Akamai / Application Gateway handle TLS + WAF, the in-cluster ingress sees plain HTTP and the migration shrinks dramatically. If WAF lives in ingress (ModSecurity), plan a separate WAF migration first.
+- [ ] Pre-stage Envoy Gateway in non-prod with the translated routes; pass functional tests against canonical user journeys (login, search, add-to-cart, checkout — retailer flow).
+- [ ] Lower DNS TTL to **60 s** on the records that will move. (TTL cache is the silent killer of fast rollbacks.)
+- [ ] Capture **≥7 days of nginx baseline** — request rate, 5xx %, p99 latency, broken down by host and route. These become the SLO gates.
+- [ ] Identify **change windows that avoid peak retail load** (afternoon checkout rush, weekend mornings, Black Friday / EOFY).
+- [ ] Comms: change ticket, app-team broadcast, incident-channel announcement, on-call handover plan.
 
 ## Phase 1 — Deploy in parallel (T −1 day)
 
@@ -53,7 +59,16 @@ Step-by-step procedure for a real production cutover from ingress-nginx to Envoy
 
 ## Phase 3 — Weighted ramp (T 0)
 
-Use DNS weighted records (Route 53 / Cloud DNS / Akamai) or a CDN traffic-split. Either way, the percentages move *external* traffic between the two ingresses.
+Use weighted DNS or a CDN traffic-split. Provider depends on cloud + edge:
+
+| Platform | Weighted-traffic mechanism |
+|---|---|
+| AWS | Route 53 weighted records, or ALB weighted target groups |
+| **AKS / Azure** | **Azure Traffic Manager** (weighted profile) or **Azure Front Door** rule-set with origin groups |
+| GKE / GCP | Cloud DNS weighted records, or GCP HTTPS LB URL maps with weighted backend services |
+| Multi-cloud / SaaS | Akamai / Cloudflare / Fastly traffic-split rules |
+
+Either way, the percentages move *external* traffic between the two ingresses.
 
 | Step | Envoy % | Hold | Auto-rollback trigger |
 |---|---|---|---|
