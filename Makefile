@@ -112,6 +112,15 @@ tunnel-stop: ## Stop the envoy port-forward
 	@rm -f /tmp/envoy-tunnel.pid
 	@echo "tunnel stopped"
 
+envoy-admin: ## Port-forward Envoy proxy admin interface to :19000 (config_dump / clusters / listeners)
+	@pkill -f "port-forward.*19000:19000" 2>/dev/null || true
+	@POD=$$(kubectl -n envoy-gateway-system get pod -l gateway.envoyproxy.io/owning-gateway-name=eg -o name | head -1); \
+		kubectl -n envoy-gateway-system port-forward $$POD 19000:19000 > /tmp/envoy-admin-pf.log 2>&1 & \
+		echo $$! > /tmp/envoy-admin-pf.pid
+	@sleep 2
+	@curl -s -o /dev/null -w "envoy admin :19000 -> HTTP %{http_code}\n" http://localhost:19000/ready
+	@echo "try: curl localhost:19000/config_dump  |  /clusters  |  /listeners  |  /stats"
+
 argocd-install: ## Install ArgoCD via Helm (anonymous admin enabled — LOCAL LAB ONLY)
 	$(SHOW) "helm install argocd"
 	@helm repo add argo https://argoproj.github.io/argo-helm >/dev/null 2>&1 || true

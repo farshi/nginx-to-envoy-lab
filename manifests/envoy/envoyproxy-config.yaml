@@ -17,3 +17,15 @@ spec:
     kubernetes:
       envoyService:
         type: ClusterIP
+  # Bind the full admin interface to 0.0.0.0:19000 so /config_dump, /clusters,
+  # /listeners are reachable via kubectl port-forward. Default is 127.0.0.1
+  # which is invisible to port-forward and the container is distroless so
+  # exec-into-pod doesn't help. LOCAL LAB ONLY — never enable this in prod.
+  bootstrap:
+    type: Merge
+    value: |
+      admin:
+        address:
+          socket_address:
+            address: 0.0.0.0
+            port_value: 19000
