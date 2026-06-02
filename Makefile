@@ -186,3 +186,118 @@ down: ## Destroy cluster
 	@k3d cluster delete $(CLUSTER) || true
 
 clean: down ## Alias for down
+
+# ───────────────────────────────────────────────────────────────────
+# DEMO MODE — scripted progressive steps for live walkthroughs
+# Usage flow:   demo-reset  →  demo-step1  →  ...  →  demo-step6
+# ───────────────────────────────────────────────────────────────────
+
+NARRATE = @printf '\n\033[1;36m── %s ──\033[0m\n' $(1); printf '\033[2m%s\033[0m\n\n' $(2)
+
+demo-reset: ## DEMO step 0 — reset cluster to "today" (only nginx routing, no Envoy)
+	$(call NARRATE,"Step 0: today's state","Tearing down any Envoy Gateway / HTTPRoute. Cluster will show ONLY the nginx ingress.")
+	-@kubectl delete -n demo httproute demo-via-envoy 2>/dev/null
+	-@kubectl delete -n demo gateway eg 2>/dev/null
+	-@kubectl delete gatewayclass eg 2>/dev/null
+	-@kubectl delete -n monitoring podmonitor envoy-proxy 2>/dev/null
+	-@kubectl delete -n envoy-gateway-system svc envoy-edge 2>/dev/null
+	@sleep 3
+	@echo
+	@echo "Now run:  make demo-step1"
+
+demo-step1: ## DEMO step 1 — show what is in the cluster today (only nginx)
+	$(call NARRATE,"Step 1: inventory","Audit command every migration starts with. ONE artefact that drives the whole timeline.")
+	@echo '$$ kubectl get ing -A'
+	@kubectl get ing -A
+	@echo
+	@echo '$$ kubectl get ing -A -o yaml | grep -E "nginx.ingress|ingressClassName|host:"'
+	@kubectl get ing -A -o yaml | grep -E "nginx.ingress|ingressClassName|host:" || true
+	@echo
+	@echo "↓ Say: 'Today the cluster has one ingress, ingress-nginx. Two annotations in use."
+	@echo "         No Envoy. No Gateway API resources. Standard nginx setup.'"
+	@echo
+	@echo "Now run:  make demo-step2"
+
+demo-step2: ## DEMO step 2 — deploy Envoy Gateway alongside nginx (parallel stack)
+	$(call NARRATE,"Step 2: deploy Envoy parallel","Apply GatewayClass + Gateway + HTTPRoute + stable Service — same backend; new ingress path.")
+	@echo '$$ kubectl apply -f manifests/envoy/'
+	@kubectl apply -f manifests/envoy/
+	@echo
+	@echo "waiting for envoy proxy pod..."
+	@kubectl -n envoy-gateway-system wait pod -l gateway.envoyproxy.io/owning-gateway-name=eg \
+		--for=condition=Ready --timeout=180s
+	@echo
+	@$(MAKE) -s tunnel
+	@echo
+	@echo "↓ Say: 'Three K8s objects — GatewayClass, Gateway, HTTPRoute. Same backend Service."
+	@echo "         Envoy proxy is now serving on envoy-demo.localhost, nginx still serving everyone else.'"
+	@echo
+	@echo "Now run:  make demo-step3"
+
+demo-step3: ## DEMO step 3 — prove both paths serve the same backend
+	$(call NARRATE,"Step 3: side by side","Same backend response from two different ingresses.")
+	@echo '$$ curl -H "Host: nginx-demo.localhost" http://localhost:8081/'
+	@curl -s -H "Host: nginx-demo.localhost" http://localhost:8081/ | head -c 200; echo
+	@echo
+	@echo '$$ curl -H "Host: envoy-demo.localhost" http://localhost:8082/'
+	@curl -s -H "Host: envoy-demo.localhost" http://localhost:8082/ | head -c 200; echo
+	@echo
+	@echo "↓ Say: 'Same backend, different proxy. Both return 200. Now I can compare them in the dashboard.'"
+	@echo
+	@echo "Now run:  make demo-step4"
+
+demo-step4: ## DEMO step 4 — open Grafana dashboard (side-by-side RED panels)
+	$(call NARRATE,"Step 4: the comparison dashboard","Grafana opens. Blue panels = nginx baseline. Orange = Envoy. Same row = same metric.")
+	@open http://localhost:3001/d/nginx-vs-envoy/ingress-migration-nginx-vs-envoy?orgId=1\&theme=light 2>/dev/null \
+		|| xdg-open http://localhost:3001/d/nginx-vs-envoy/ 2>/dev/null \
+		|| echo "open http://localhost:3001/d/nginx-vs-envoy/ingress-migration-nginx-vs-envoy"
+	@echo
+	@echo "↓ Say: 'Three rows: rate, errors, latency p99. Blue baseline, orange new path."
+	@echo "         The cutover decision is binary — orange tracks blue go forward,"
+	@echo "         orange diverges roll back. Stat panels below: xDS sync, healthy endpoints,"
+	@echo "         outlier ejections, circuit-breaker overflow — the leading indicators.'"
+	@echo
+	@echo "Now run:  make demo-step5"
+
+demo-step5: ## DEMO step 5 — show the weighted canary (HTTPRoute backendRefs with weights)
+	$(call NARRATE,"Step 5: weighted ramp","HTTPRoute with two backendRefs and weights. This is the native traffic-split.")
+	@echo "Current HTTPRoute:"
+	@kubectl get httproute -n demo demo-via-envoy -o yaml | grep -A8 "backendRefs:"
+	@echo
+	@echo "In a real cutover, change weights step by step:"
+	@echo "  5% --> 25% --> 50% --> 100%   with SLO gate at each hold."
+	@echo "  YAML stays the same shape — just two backendRefs with different weights."
+	@echo
+	@echo "Example of a 5/95 split (don't apply, just show):"
+	@printf "  backendRefs:\n  - name: demo-api\n    port: 80\n    weight: 95\n  - name: demo-api-v2\n    port: 80\n    weight: 5\n"
+	@echo
+	@echo "↓ Say: 'In Gateway API the split is a first-class field, not an annotation."
+	@echo "         No reload, no nginx-canary annotation. Same shape works for v1/v2 app versions"
+	@echo "         and for the migration itself when the LB sits in front.'"
+	@echo
+	@echo "Now run:  make demo-step6   (rollback)"
+
+demo-step6: ## DEMO step 6 — rollback to nginx-only (delete Envoy resources)
+	$(call NARRATE,"Step 6: rollback","Delete the Gateway + HTTPRoute. Envoy stops serving. nginx is unaffected.")
+	-@kubectl delete -n demo httproute demo-via-envoy
+	-@kubectl delete -n demo gateway eg
+	@sleep 2
+	@echo
+	@echo '$$ kubectl get ing,gateway,httproute -A'
+	@kubectl get ing,gateway,httproute -A
+	@echo
+	@echo "↓ Say: 'Two kubectl deletes and we are back to nginx-only. xDS pushes the removal"
+	@echo "         to the Envoy proxy in seconds. In production this is L3 in the rollback tree —"
+	@echo "         in-cluster pin without touching DNS.'"
+	@echo
+	@echo "Demo complete. Run 'make demo-step1' to restart, or 'make demo-step2' to re-deploy Envoy."
+
+demo-help: ## DEMO — show the script in order
+	@echo "Demo run order (one command per step):"
+	@echo "  make demo-reset    # back to 'today' (only nginx)"
+	@echo "  make demo-step1    # show inventory + audit command"
+	@echo "  make demo-step2    # deploy Envoy parallel"
+	@echo "  make demo-step3    # curl both paths"
+	@echo "  make demo-step4    # open Grafana side-by-side"
+	@echo "  make demo-step5    # explain weighted ramp YAML"
+	@echo "  make demo-step6    # rollback (delete Envoy)"
