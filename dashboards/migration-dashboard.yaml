@@ -77,11 +77,11 @@ data:
         },
         {
           "type": "timeseries", "title": "envoy — p99 latency",
-          "description": "Cutover gate: envoy p99 ≤ nginx p99 × 1.10. Above = auto rollback. Compare visually with the nginx panel on the left.",
+          "description": "Cutover gate: envoy p99 ≤ nginx p99 × 1.10. envoy_cluster_upstream_rq_time is in MILLISECONDS in Envoy — divided by 1000 here so the panel unit matches the nginx panel (seconds).",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
           "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "s" } },
           "targets": [
-            { "expr": "histogram_quantile(0.99, sum(rate(envoy_cluster_upstream_rq_time_bucket[5m])) by (le))", "legendFormat": "envoy p99" }
+            { "expr": "histogram_quantile(0.99, sum(rate(envoy_cluster_upstream_rq_time_bucket[5m])) by (le)) / 1000", "legendFormat": "envoy p99" }
           ]
         },
         {
