@@ -12,7 +12,7 @@ NAMESPACE ?= demo
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-up: cluster image install-monitoring install-nginx install-envoy apply tunnel ## End-to-end bootstrap (includes envoy host:8082 tunnel)
+up: cluster image install-monitoring install-nginx install-envoy install-argocd apply argocd-app tunnel ## End-to-end bootstrap (cluster + all controllers + ArgoCD + manifests + envoy tunnel)
 
 cluster: ## Create k3d cluster (Traefik disabled, ports exposed for both ingresses + Grafana + Prom)
 	$(SHOW) "k3d cluster create $(CLUSTER)"
